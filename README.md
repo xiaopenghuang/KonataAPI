@@ -101,7 +101,14 @@ https://proxy.cifang.xyz/proxy
 
 ## 打包为可执行文件
 
-### 方式一：使用打包脚本（推荐）
+### 方式一：使用 spec 文件（推荐）
+
+```bash
+pip install pyinstaller
+pyinstaller KonataAPI.spec --clean
+```
+
+### 方式二：使用打包脚本
 
 1. 编辑 `build.bat`，填写你的 Conda 路径和环境：
    ```bat
@@ -113,38 +120,13 @@ https://proxy.cifang.xyz/proxy
 
 3. 打包完成后，可执行文件位于 `dist/KonataAPI.exe`
 
-### 方式二：手动打包
-
-```bash
-pip install pyinstaller
-
-pyinstaller --onefile --windowed --name "KonataAPI" ^
-    --icon=assets/icon.ico ^
-    --add-data "assets;assets" ^
-    --add-data "config;config" ^
-    --add-data "src/konata_api;konata_api" ^
-    --hidden-import=ttkbootstrap ^
-    --hidden-import=ttkbootstrap.themes ^
-    --hidden-import=ttkbootstrap.style ^
-    --hidden-import=ttkbootstrap.widgets ^
-    --hidden-import=ttkbootstrap.widgets.scrolled ^
-    --hidden-import=ttkbootstrap.constants ^
-    --hidden-import=ttkbootstrap.window ^
-    --collect-submodules=ttkbootstrap ^
-    --hidden-import=PIL ^
-    --hidden-import=PIL._tkinter_finder ^
-    --hidden-import=PIL.Image ^
-    --hidden-import=PIL.ImageTk ^
-    --hidden-import=requests ^
-    main.py
-```
-
 ## 项目结构
 
 ```
 KonataAPI/
 ├── main.py                     # 入口文件
 ├── build.bat                   # 打包脚本
+├── KonataAPI.spec              # PyInstaller 打包配置
 ├── src/
 │   └── konata_api/
 │       ├── __init__.py

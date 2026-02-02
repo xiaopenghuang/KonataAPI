@@ -61,6 +61,8 @@ pyinstaller --onefile --windowed --name "KonataAPI" ^
     --hidden-import=PIL.Image ^
     --hidden-import=PIL.ImageTk ^
     --hidden-import=requests ^
+    --hidden-import=pystray ^
+    --hidden-import=pystray._win32 ^
     --clean ^
     --noconfirm ^
     main.py

@@ -11,7 +11,6 @@ venv/
 # PyInstaller
 build/
 dist/
-*.spec
 
 # IDE
 .idea/
