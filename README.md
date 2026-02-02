@@ -11,6 +11,10 @@
 - 自定义 API 接口路径
 - 按站点配置日志代理（解决部分站点限制）
 - 查看原始 API 返回数据
+- **系统托盘支持** - 最小化到托盘，右键菜单快捷操作
+- **开机自启动** - 可选随 Windows 启动自动运行
+- **自动批量查询** - 定时自动查询所有站点余额
+
 ![alt text](assets/image.png)
 ![alt text](assets/image-1.png)
 ## 安装
@@ -74,6 +78,11 @@ https://proxy.cifang.xyz/proxy
     "balance_usage": "/v1/dashboard/billing/usage",
     "logs": "/api/log/token",
     "logs_page_size": 50
+  },
+  "minimize_to_tray": true,
+  "auto_query": {
+    "enabled": false,
+    "interval_minutes": 30
   }
 }
 ```
@@ -85,6 +94,10 @@ https://proxy.cifang.xyz/proxy
   - `key` - API Key
   - `proxy` - 日志代理地址（可选，留空则直接访问）
 - `api_endpoints` - 全局接口路径配置（可在设置中修改）
+- `minimize_to_tray` - 关闭窗口时是否最小化到托盘
+- `auto_query` - 自动查询设置
+  - `enabled` - 是否启用自动查询
+  - `interval_minutes` - 查询间隔（分钟）
 
 ## 打包为可执行文件
 
@@ -137,6 +150,7 @@ KonataAPI/
 │       ├── __init__.py
 │       ├── app.py              # GUI 主应用
 │       ├── dialogs.py          # 对话框组件
+│       ├── tray.py             # 系统托盘模块
 │       ├── utils.py            # 工具函数
 │       └── api.py              # API 查询逻辑
 ├── assets/

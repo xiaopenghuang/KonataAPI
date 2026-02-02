@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+import winreg
 
 
 def get_exe_dir():
@@ -57,3 +58,52 @@ def save_config(config):
         os.makedirs(config_dir)
     with open(config_file, "w", encoding="utf-8") as f:
         json.dump(config, f, ensure_ascii=False, indent=2)
+
+
+# === 开机自启动相关 ===
+APP_NAME = "KonataAPI"
+REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
+
+
+def get_exe_path():
+    """获取当前可执行文件路径"""
+    if hasattr(sys, '_MEIPASS'):
+        # 打包后：返回 exe 路径
+        return sys.executable
+    # 开发时：返回 python 解释器 + main.py
+    main_py = os.path.join(get_exe_dir(), "main.py")
+    return f'"{sys.executable}" "{main_py}"'
+
+
+def is_autostart_enabled():
+    """检查是否已设置开机自启动"""
+    try:
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_PATH, 0, winreg.KEY_READ)
+        try:
+            value, _ = winreg.QueryValueEx(key, APP_NAME)
+            winreg.CloseKey(key)
+            return True
+        except FileNotFoundError:
+            winreg.CloseKey(key)
+            return False
+    except Exception:
+        return False
+
+
+def set_autostart(enable: bool):
+    """设置或取消开机自启动"""
+    try:
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_PATH, 0, winreg.KEY_SET_VALUE)
+        if enable:
+            exe_path = get_exe_path()
+            winreg.SetValueEx(key, APP_NAME, 0, winreg.REG_SZ, exe_path)
+        else:
+            try:
+                winreg.DeleteValue(key, APP_NAME)
+            except FileNotFoundError:
+                pass  # 本来就没有，不需要删除
+        winreg.CloseKey(key)
+        return True
+    except Exception as e:
+        print(f"设置开机自启动失败: {e}")
+        return False

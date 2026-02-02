@@ -16,6 +16,7 @@ from konata_api.utils import (
     get_exe_dir, resource_path, load_config, save_config
 )
 from konata_api.dialogs import SettingsDialog, RawResponseDialog
+from konata_api.tray import TrayIcon
 
 
 class ApiQueryApp:
@@ -45,6 +46,17 @@ class ApiQueryApp:
 
         # 刷新配置列表
         self.refresh_profile_list()
+
+        # 初始化系统托盘
+        self.tray = TrayIcon(self)
+        self.tray.run()
+
+        # 重写窗口关闭行为
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close_window)
+
+        # 自动查询定时器 ID
+        self._auto_query_timer_id = None
+        self.start_auto_query()
 
     def create_widgets(self):
         # 创建背景 Label
@@ -582,7 +594,68 @@ class ApiQueryApp:
 
     def open_settings(self):
         """打开设置对话框"""
-        SettingsDialog(self.root, self.config)
+        SettingsDialog(self.root, self.config, app=self)
+
+    def show_window(self):
+        """显示主窗口"""
+        self.root.deiconify()
+        self.root.lift()
+        self.root.focus_force()
+
+    def hide_window(self):
+        """隐藏主窗口到托盘"""
+        self.root.withdraw()
+
+    def on_close_window(self):
+        """窗口关闭按钮处理"""
+        if self.config.get("minimize_to_tray", True):
+            self.hide_window()
+        else:
+            self.quit_app()
+
+    def quit_app(self):
+        """真正退出程序"""
+        self.stop_auto_query()
+        if hasattr(self, 'tray'):
+            self.tray.stop()
+        self.root.destroy()
+
+    # === 自动查询功能 ===
+
+    def start_auto_query(self):
+        """启动自动查询定时器"""
+        auto_query = self.config.get("auto_query", {})
+        if not auto_query.get("enabled", False):
+            return
+
+        interval_minutes = auto_query.get("interval_minutes", 30)
+        interval_ms = interval_minutes * 60 * 1000  # 转换为毫秒
+
+        self._auto_query_timer_id = self.root.after(interval_ms, self._auto_query_tick)
+        self.status_var.set(f"⏰ 自动查询已启用，每 {interval_minutes} 分钟查询一次")
+
+    def stop_auto_query(self):
+        """停止自动查询定时器"""
+        if self._auto_query_timer_id:
+            self.root.after_cancel(self._auto_query_timer_id)
+            self._auto_query_timer_id = None
+
+    def _auto_query_tick(self):
+        """自动查询定时器回调"""
+        # 执行批量查询
+        self.query_all_balance()
+
+        # 重新设置下一次定时
+        auto_query = self.config.get("auto_query", {})
+        if auto_query.get("enabled", False):
+            interval_minutes = auto_query.get("interval_minutes", 30)
+            interval_ms = interval_minutes * 60 * 1000
+            self._auto_query_timer_id = self.root.after(interval_ms, self._auto_query_tick)
+
+    def update_auto_query(self):
+        """更新自动查询设置（从设置对话框调用）"""
+        self.stop_auto_query()
+        self.start_auto_query()
 
 
 def main():
