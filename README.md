@@ -5,8 +5,11 @@
 ## 功能特性
 
 - 支持多中转站配置管理
+![alt text](assets/站点统计.png)
 - 查询账户余额（USD / Token 两种统计方式）
+![alt text](assets/余额查询.png)
 - 查询调用日志
+![alt text](assets/日志查询.png)
 - 批量查询所有配置的余额
 - 自定义 API 接口路径
 - **独立认证配置** - 余额查询和日志查询可分别配置认证方式
@@ -22,7 +25,8 @@
 - **站点测试模块** - 连通性测试、Claude 真伪性检测、原生对话
   - **多种 API 预设** - 支持原生 Anthropic/OpenAI、中转站格式、Claude CLI 真实格式
   - **Claude CLI 真实格式** - 完全模拟 Claude Code CLI 请求，可绕过部分中转站验证
-
+![alt text](assets/连通性测试.png)
+![alt text](assets/真伪性测试.png)
 
 
 ## 支持的 API 格式
@@ -196,6 +200,9 @@ KonataAPI/
 ├── README.md
 └── .gitignore
 ```
+
+## 感谢L站此方佬**(@user2996)**针对claude模型真假方法的分享，本项目根据https://apikey.cifang.xyz/进行模仿与个人针对性更改。
+
 
 ## License
 
