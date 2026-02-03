@@ -1,9 +1,23 @@
 {
   "profiles": [
     {
-      "name": "示例站点",
+      "name": "示例站点A",
       "url": "https://api.example.com",
-      "key": "sk-your-api-key-here"
+      "key": "sk-your-api-key-here",
+      "balance_auth_type": "bearer",
+      "log_auth_type": "url_key",
+      "endpoints": {
+        "balance_subscription": "/v1/dashboard/billing/subscription",
+        "balance_usage": "/v1/dashboard/billing/usage",
+        "logs": "/api/log/token"
+      }
+    },
+    {
+      "name": "示例站点B (全部URL Key认证)",
+      "url": "https://other.example.com",
+      "key": "sk-xxx",
+      "balance_auth_type": "url_key",
+      "log_auth_type": "url_key"
     }
   ],
   "api_endpoints": {

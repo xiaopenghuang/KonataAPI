@@ -15,16 +15,18 @@ from konata_api.api import query_balance, query_logs
 from konata_api.utils import (
     get_exe_dir, resource_path, load_config, save_config
 )
-from konata_api.dialogs import SettingsDialog, RawResponseDialog
+from konata_api.dialogs import SettingsDialog, RawResponseDialog, ProfileAdvancedDialog, BalanceSummaryDialog
 from konata_api.tray import TrayIcon
+from konata_api.stats_dialog import StatsDialog
+from konata_api.test_dialog import TestDialog
 
 
 class ApiQueryApp:
     def __init__(self, root):
         self.root = root
         self.root.title("此方API查查")
-        self.root.geometry("950x700")
-        self.root.minsize(850, 650)
+        self.root.geometry("1100x750")
+        self.root.minsize(950, 700)
 
         # 设置窗口图标
         try:
@@ -85,6 +87,7 @@ class ApiQueryApp:
         list_btn_frame = ttk.Frame(left_frame)
         list_btn_frame.pack(fill=X, pady=(15, 0))
         ttk.Button(list_btn_frame, text="🔄 查询全部余额", command=self.query_all_balance, bootstyle="success-outline", width=20).pack(fill=X, pady=3)
+        ttk.Button(list_btn_frame, text="⚙️ 高级设置", command=self.open_profile_advanced, bootstyle="info-outline", width=20).pack(fill=X, pady=3)
         ttk.Button(list_btn_frame, text="🗑️ 删除选中", command=self.delete_profile, bootstyle="danger-outline", width=20).pack(fill=X, pady=3)
 
         # === 右侧：详情和结果 ===
@@ -101,6 +104,8 @@ class ApiQueryApp:
         ttk.Label(title_left, text="支持多中转站配置管理与批量查询", font=("Microsoft YaHei", 9), bootstyle="secondary").pack(anchor=W)
 
         ttk.Button(title_frame, text="⚙️ 设置", command=self.open_settings, bootstyle="secondary-outline", width=10).pack(side=RIGHT, padx=5)
+        ttk.Button(title_frame, text="📊 统计", command=self.open_stats, bootstyle="info-outline", width=10).pack(side=RIGHT, padx=5)
+        ttk.Button(title_frame, text="🧪 测试", command=self.open_test, bootstyle="warning-outline", width=10).pack(side=RIGHT, padx=5)
 
         # === 配置详情区 ===
         config_frame = ttk.Labelframe(right_frame, text=" 配置详情 ", padding=15, bootstyle="primary")
@@ -130,14 +135,6 @@ class ApiQueryApp:
         self.key_entry.pack(side=LEFT, fill=X, expand=YES, padx=(0, 10))
         self.show_key_var = ttk.BooleanVar()
         ttk.Checkbutton(key_frame, text="显示", variable=self.show_key_var, command=self.toggle_key_visibility, bootstyle="round-toggle").pack(side=LEFT)
-
-        # 日志代理（按站点配置）
-        proxy_frame = ttk.Frame(config_frame)
-        proxy_frame.pack(fill=X, pady=5)
-        ttk.Label(proxy_frame, text="日志代理:", width=12).pack(side=LEFT)
-        self.proxy_var = ttk.StringVar()
-        ttk.Entry(proxy_frame, textvariable=self.proxy_var, bootstyle="info").pack(side=LEFT, fill=X, expand=YES)
-        ttk.Label(proxy_frame, text="(可选)", bootstyle="secondary").pack(side=LEFT, padx=(5, 0))
 
         # === 操作按钮 ===
         btn_frame = ttk.Frame(right_frame)
@@ -275,7 +272,13 @@ class ApiQueryApp:
             self.name_var.set(p.get("name", ""))
             self.url_var.set(p.get("url", ""))
             self.key_var.set(p.get("key", ""))
-            self.proxy_var.set(p.get("proxy", ""))
+            # 保存当前 profile 的额外配置（auth_type, endpoints, proxy, jwt_token）
+            old_auth_type = p.get("auth_type", "bearer")
+            self._current_profile_balance_auth_type = p.get("balance_auth_type", old_auth_type)
+            self._current_profile_log_auth_type = p.get("log_auth_type", "url_key")
+            self._current_profile_endpoints = p.get("endpoints", {})
+            self._current_profile_proxy = p.get("proxy", "")
+            self._current_profile_jwt_token = p.get("jwt_token", "")
 
     def save_profile(self):
         """保存当前配置"""
@@ -288,10 +291,27 @@ class ApiQueryApp:
             "name": name,
             "url": self.url_var.get().strip(),
             "key": self.key_var.get().strip(),
-            "proxy": self.proxy_var.get().strip(),
         }
 
+        # 保留已有的 auth_type, endpoints, proxy, jwt_token 配置
         profiles = self.config.get("profiles", [])
+        for p in profiles:
+            if p.get("name") == name:
+                # 向后兼容：如果存在旧的 auth_type，映射到新字段
+                if "balance_auth_type" in p:
+                    profile["balance_auth_type"] = p["balance_auth_type"]
+                elif "auth_type" in p:
+                    profile["balance_auth_type"] = p["auth_type"]
+                if "log_auth_type" in p:
+                    profile["log_auth_type"] = p["log_auth_type"]
+                if "endpoints" in p:
+                    profile["endpoints"] = p["endpoints"]
+                if "proxy" in p:
+                    profile["proxy"] = p["proxy"]
+                if "jwt_token" in p:
+                    profile["jwt_token"] = p["jwt_token"]
+                break
+
         found = False
         for i, p in enumerate(profiles):
             if p.get("name") == name:
@@ -325,6 +345,31 @@ class ApiQueryApp:
                 self.refresh_profile_list()
                 self.status_var.set(f"🗑️ 配置 '{name}' 已删除")
 
+    def open_profile_advanced(self):
+        """打开站点高级设置对话框"""
+        selection = self.profile_tree.selection()
+        if not selection:
+            messagebox.showwarning("提示", "请先选择要设置的站点")
+            return
+
+        idx = self.profile_tree.index(selection[0])
+        profiles = self.config.get("profiles", [])
+        if idx < len(profiles):
+            profile = profiles[idx]
+
+            def on_save(updated_profile):
+                profiles[idx] = updated_profile
+                self.config["profiles"] = profiles
+                save_config(self.config)
+                self.status_var.set(f"✅ 站点 '{updated_profile.get('name', '')}' 高级设置已保存")
+                # 如果当前加载的是这个 profile，更新内存中的配置
+                if self.name_var.get() == updated_profile.get("name"):
+                    self._current_profile_balance_auth_type = updated_profile.get("balance_auth_type", "bearer")
+                    self._current_profile_log_auth_type = updated_profile.get("log_auth_type", "url_key")
+                    self._current_profile_endpoints = updated_profile.get("endpoints", {})
+
+            ProfileAdvancedDialog(self.root, profile.copy(), on_save)
+
     def query_balance(self):
         """查询当前配置的余额"""
         url = self.url_var.get().strip()
@@ -334,16 +379,20 @@ class ApiQueryApp:
             messagebox.showwarning("提示", "请填写 Base URL 和 API Key")
             return
 
-        endpoints = self.config.get("api_endpoints", {})
-        sub_api = endpoints.get("balance_subscription", "/v1/dashboard/billing/subscription")
-        usage_api = endpoints.get("balance_usage", "/v1/dashboard/billing/usage")
+        # 获取 profile 级别的配置，如果没有则使用全局配置
+        profile_endpoints = getattr(self, '_current_profile_endpoints', {})
+        global_endpoints = self.config.get("api_endpoints", {})
+
+        sub_api = profile_endpoints.get("balance_subscription") or global_endpoints.get("balance_subscription", "/v1/dashboard/billing/subscription")
+        usage_api = profile_endpoints.get("balance_usage") or global_endpoints.get("balance_usage", "/v1/dashboard/billing/usage")
+        auth_type = getattr(self, '_current_profile_balance_auth_type', 'bearer')
 
         self.status_var.set("⏳ 正在查询余额...")
         self.root.update()
 
         def query_thread():
             try:
-                result = query_balance(key, url, subscription_api=sub_api, usage_api=usage_api)
+                result = query_balance(key, url, subscription_api=sub_api, usage_api=usage_api, auth_type=auth_type)
                 self.root.after(0, lambda: self.on_balance_result(result, self.name_var.get() or url))
             except Exception as e:
                 self.root.after(0, lambda: self.on_query_error(str(e)))
@@ -376,6 +425,16 @@ class ApiQueryApp:
         self.result_text.insert("end", f"  📊 批量查询 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         self.result_text.insert("end", f"{'═'*50}\n\n")
 
+        global_endpoints = self.config.get("api_endpoints", {})
+
+        # 汇总数据
+        summary_data = {
+            "success": 0,
+            "failed": 0,
+            "skipped": 0,
+            "sites": []
+        }
+
         for i, p in enumerate(profiles):
             name = p.get("name", f"配置{i+1}")
             url = p.get("url", "")
@@ -383,18 +442,89 @@ class ApiQueryApp:
 
             if not url or not key:
                 self.result_text.insert("end", f"⚠️ 【{name}】配置不完整，跳过\n\n")
+                summary_data["skipped"] += 1
+                summary_data["sites"].append({
+                    "name": name,
+                    "balance": 0,
+                    "unit": "",
+                    "today_cost": 0,
+                    "error": "配置不完整"
+                })
                 continue
 
             self.status_var.set(f"⏳ 正在查询: {name} ({i+1}/{len(profiles)})")
             self.root.update()
 
+            # 获取 profile 级别的配置
+            profile_endpoints = p.get("endpoints", {})
+            sub_api = profile_endpoints.get("balance_subscription") or global_endpoints.get("balance_subscription", "/v1/dashboard/billing/subscription")
+            usage_api = profile_endpoints.get("balance_usage") or global_endpoints.get("balance_usage", "/v1/dashboard/billing/usage")
+            # 向后兼容：如果没有 balance_auth_type，使用旧的 auth_type
+            auth_type = p.get("balance_auth_type", p.get("auth_type", "bearer"))
+
             try:
-                result = query_balance(key, url)
+                result = query_balance(key, url, subscription_api=sub_api, usage_api=usage_api, auth_type=auth_type)
                 self.display_balance_result(name, result, show_header=False)
+
+                # 收集站点数据
+                site_data = self.extract_site_summary(name, result)
+                summary_data["sites"].append(site_data)
+
+                if site_data.get("error"):
+                    summary_data["failed"] += 1
+                else:
+                    summary_data["success"] += 1
+
             except Exception as e:
                 self.result_text.insert("end", f"❌ 【{name}】查询出错: {e}\n\n")
+                summary_data["failed"] += 1
+                summary_data["sites"].append({
+                    "name": name,
+                    "balance": 0,
+                    "unit": "",
+                    "today_cost": 0,
+                    "error": str(e)
+                })
 
         self.status_var.set(f"✅ 批量查询完成，共 {len(profiles)} 个配置")
+
+        # 弹出汇总对话框
+        threshold = self.config.get("low_balance_threshold", 10)
+        BalanceSummaryDialog(self.root, summary_data, low_balance_threshold=threshold)
+
+    def extract_site_summary(self, name, result):
+        """从查询结果中提取站点汇总数据"""
+        site_data = {
+            "name": name,
+            "balance": 0,
+            "unit": "USD",
+            "today_cost": 0,
+            "error": None
+        }
+
+        if "error" in result:
+            site_data["error"] = result["error"]
+            return site_data
+
+        # OpenAI 兼容格式 (hard_limit_usd)
+        if "hard_limit_usd" in result:
+            site_data["balance"] = result.get('remaining_usd', 0)
+            site_data["unit"] = "USD"
+
+        # NewAPI Token 格式
+        elif "total_granted" in result:
+            site_data["balance"] = result.get('total_available', 0)
+            site_data["unit"] = "Token"
+
+        # sub2api / 新 API 体系格式 (balance)
+        elif "balance" in result:
+            site_data["balance"] = result.get('balance', 0)
+            site_data["unit"] = result.get('unit', 'USD') or 'USD'
+
+        # 今日消耗
+        site_data["today_cost"] = result.get('today_cost', 0)
+
+        return site_data
 
     def display_balance_result(self, name, result, show_header=True):
         """显示余额结果"""
@@ -412,18 +542,61 @@ class ApiQueryApp:
             self.result_text.see("end")
             return
 
+        has_data = False
+
+        # OpenAI 兼容格式 (hard_limit_usd)
         if "hard_limit_usd" in result:
             remaining = result.get('remaining_usd', 0)
             total = result.get('hard_limit_usd', 0)
             used = result.get('used_usd', 0)
             pct = (remaining / total * 100) if total > 0 else 0
             self.result_text.insert("end", f"   💵 USD: ${remaining:.2f} / ${total:.2f} ({pct:.1f}%)\n")
+            has_data = True
 
+        # NewAPI Token 格式
         if "total_granted" in result:
             available = result.get('total_available', 0)
             granted = result.get('total_granted', 0)
             pct = (available / granted * 100) if granted > 0 else 0
             self.result_text.insert("end", f"   🎫 Token: {available:,} / {granted:,} ({pct:.1f}%)\n")
+            has_data = True
+
+        # sub2api / 新 API 体系格式 (balance)
+        if "balance" in result and "hard_limit_usd" not in result:
+            balance = result.get('balance', 0)
+            unit = result.get('unit', 'USD')
+            plan_name = result.get('plan_name', '')
+            if plan_name:
+                self.result_text.insert("end", f"   📋 套餐: {plan_name}\n")
+            self.result_text.insert("end", f"   💰 余额: {balance:.2f} {unit}\n")
+            has_data = True
+
+        # 用量统计 (sub2api /v1/usage 或 /api/v1/usage/dashboard/stats)
+        if "total_cost" in result or "today_cost" in result:
+            total_cost = result.get('total_cost', 0)
+            today_cost = result.get('today_cost', 0)
+            total_requests = result.get('total_requests', 0)
+            today_requests = result.get('today_requests', 0)
+            total_tokens = result.get('total_tokens', 0)
+            today_tokens = result.get('today_tokens', 0)
+
+            # 格式化大数字
+            def fmt_num(n):
+                if n >= 1_000_000_000:
+                    return f"{n/1_000_000_000:.1f}B"
+                elif n >= 1_000_000:
+                    return f"{n/1_000_000:.1f}M"
+                elif n >= 1_000:
+                    return f"{n/1_000:.1f}K"
+                return str(int(n))
+
+            self.result_text.insert("end", f"   📊 消耗: ${total_cost:.2f} (今日: ${today_cost:.2f})\n")
+            self.result_text.insert("end", f"   📈 请求: {fmt_num(total_requests)} (今日: {fmt_num(today_requests)})\n")
+            self.result_text.insert("end", f"   🔢 Token: {fmt_num(total_tokens)} (今日: {fmt_num(today_tokens)})\n")
+            has_data = True
+
+        if not has_data:
+            self.result_text.insert("end", f"   ⚠️ 未获取到数据\n")
 
         self.result_text.insert("end", "\n")
         self.result_text.see("end")
@@ -437,17 +610,21 @@ class ApiQueryApp:
             messagebox.showwarning("提示", "查询日志需要填写 Base URL 和 API Key")
             return
 
-        endpoints = self.config.get("api_endpoints", {})
-        logs_api = endpoints.get("logs", "/api/log/token")
-        page_size = endpoints.get("logs_page_size", 50)
-        proxy_url = self.proxy_var.get().strip()
+        # 获取 profile 级别的配置，如果没有则使用全局配置
+        profile_endpoints = getattr(self, '_current_profile_endpoints', {})
+        global_endpoints = self.config.get("api_endpoints", {})
+
+        logs_api = profile_endpoints.get("logs") or global_endpoints.get("logs", "/api/log/token")
+        page_size = global_endpoints.get("logs_page_size", 50)
+        proxy_url = getattr(self, '_current_profile_proxy', '')
+        auth_type = getattr(self, '_current_profile_log_auth_type', 'url_key')
 
         self.status_var.set("⏳ 正在查询日志...")
         self.root.update()
 
         def query_thread():
             try:
-                result = query_logs(key, url, page_size=page_size, page=1, order="desc", custom_api_path=logs_api, proxy_url=proxy_url)
+                result = query_logs(key, url, page_size=page_size, page=1, order="desc", custom_api_path=logs_api, proxy_url=proxy_url, auth_type=auth_type)
                 self.root.after(0, lambda: self.on_logs_result(result, self.name_var.get() or "未命名"))
             except Exception as e:
                 self.root.after(0, lambda: self.on_logs_error(str(e)))
@@ -595,6 +772,15 @@ class ApiQueryApp:
     def open_settings(self):
         """打开设置对话框"""
         SettingsDialog(self.root, self.config, app=self)
+
+    def open_stats(self):
+        """打开统计对话框"""
+        profiles = self.config.get("profiles", [])
+        StatsDialog(self.root, profiles=profiles)
+
+    def open_test(self):
+        """打开站点测试对话框"""
+        TestDialog(self.root)
 
     def show_window(self):
         """显示主窗口"""

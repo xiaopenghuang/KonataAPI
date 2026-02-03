@@ -18,10 +18,17 @@ dist/
 *.swp
 *.swo
 
+
 # Project specific - config directory
 config/config.json
 config/raw_response.json
+config/stats.json
+config/api_presets.json
 results/
+debug/
+
+# Temp files
+nul
 
 # Local docs (not for publishing)
 docs/

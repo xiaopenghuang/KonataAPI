@@ -2,3 +2,5 @@ ttkbootstrap>=1.10.0
 Pillow>=9.0.0
 requests>=2.28.0
 pystray>=0.19.0
+matplotlib>=3.5.0
+httpx>=0.24.0

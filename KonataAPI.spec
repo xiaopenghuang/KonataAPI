@@ -1,8 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_submodules
 
-hiddenimports = ['ttkbootstrap', 'ttkbootstrap.themes', 'ttkbootstrap.style', 'ttkbootstrap.widgets', 'ttkbootstrap.widgets.scrolled', 'ttkbootstrap.constants', 'ttkbootstrap.window', 'PIL', 'PIL._tkinter_finder', 'PIL.Image', 'PIL.ImageTk', 'requests', 'pystray', 'pystray._win32']
+hiddenimports = ['ttkbootstrap', 'ttkbootstrap.themes', 'ttkbootstrap.style', 'ttkbootstrap.widgets', 'ttkbootstrap.widgets.scrolled', 'ttkbootstrap.constants', 'ttkbootstrap.window', 'PIL', 'PIL._tkinter_finder', 'PIL.Image', 'PIL.ImageTk', 'requests', 'httpx', 'pystray', 'pystray._win32', 'uuid', 'matplotlib']
 hiddenimports += collect_submodules('ttkbootstrap')
+hiddenimports += collect_submodules('matplotlib')
 
 
 a = Analysis(

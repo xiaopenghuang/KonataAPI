@@ -61,8 +61,12 @@ pyinstaller --onefile --windowed --name "KonataAPI" ^
     --hidden-import=PIL.Image ^
     --hidden-import=PIL.ImageTk ^
     --hidden-import=requests ^
+    --hidden-import=httpx ^
     --hidden-import=pystray ^
     --hidden-import=pystray._win32 ^
+    --hidden-import=uuid ^
+    --hidden-import=matplotlib ^
+    --collect-submodules=matplotlib ^
     --clean ^
     --noconfirm ^
     main.py
@@ -75,6 +79,9 @@ if exist "dist\KonataAPI.exe" (
     echo ========================================
     if not exist "dist\config" mkdir "dist\config"
     copy "config\config.example.json" "dist\config\" >nul 2>&1
+    copy "config\cli_tools.json" "dist\config\" >nul 2>&1
+    copy "config\cli_system.json" "dist\config\" >nul 2>&1
+    echo   Config files copied to dist\config\
 ) else (
     echo ========================================
     echo   Build Failed!
