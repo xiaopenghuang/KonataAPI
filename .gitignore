@@ -24,6 +24,8 @@ config/config.json
 config/raw_response.json
 config/stats.json
 config/api_presets.json
+config/checkin_log.json
+
 results/
 debug/
 

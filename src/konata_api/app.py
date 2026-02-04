@@ -11,14 +11,14 @@ import os
 import threading
 from datetime import datetime
 
-from konata_api.api import query_balance, query_logs
+from konata_api.api import query_balance, query_logs, do_checkin, query_balance_by_cookie
 from konata_api.utils import (
     get_exe_dir, resource_path, load_config, save_config
 )
 from konata_api.dialogs import SettingsDialog, RawResponseDialog, BalanceSummaryDialog, ProfileAdvancedDialog
 from konata_api.tray import TrayIcon
 from konata_api.stats_dialog import StatsFrame
-from konata_api.stats import load_stats, save_stats, get_site_by_id
+from konata_api.stats import load_stats, save_stats, get_site_by_id, add_checkin_log, update_site, load_checkin_log
 from konata_api.test_dialog import TestFrame
 
 
@@ -93,7 +93,9 @@ class ApiQueryApp:
         ttk.Button(list_btn_frame, text="➕ 添加站点", command=self.add_site_from_list, bootstyle="success-outline", width=20).pack(fill=X, pady=3)
         ttk.Button(list_btn_frame, text="🔄 刷新列表", command=self.refresh_profile_list, bootstyle="secondary-outline", width=20).pack(fill=X, pady=3)
         ttk.Button(list_btn_frame, text="💰 查询全部余额", command=self.query_all_balance, bootstyle="info-outline", width=20).pack(fill=X, pady=3)
+        ttk.Button(list_btn_frame, text="🍪 Cookie查余额并保存", command=self.query_all_balance_by_cookie_and_save, bootstyle="success-outline", width=20).pack(fill=X, pady=3)
         ttk.Button(list_btn_frame, text="🎁 一键签到", command=self.open_all_checkin_from_list, bootstyle="warning-outline", width=20).pack(fill=X, pady=3)
+        ttk.Button(list_btn_frame, text="📋 签到记录", command=self.show_checkin_log, bootstyle="secondary-outline", width=20).pack(fill=X, pady=3)
         ttk.Button(list_btn_frame, text="🗑️ 删除选中", command=self.delete_site_from_list, bootstyle="danger-outline", width=20).pack(fill=X, pady=3)
 
         # === 右侧：主 Notebook 标签页 ===
@@ -438,23 +440,149 @@ class ApiQueryApp:
             self.status_var.set(f"🗑️ 已删除站点: {site.get('name', '')}")
 
     def open_all_checkin_from_list(self):
-        """一键打开所有签到网址"""
+        """一键自动签到（有签到网址的才参与，有Cookie的调API，没有的打开浏览器）"""
         import webbrowser
 
-        checkin_urls = []
+        # 分类站点（必须有 checkin_url 才参与签到）
+        api_sites = []  # 有 checkin_url + session_cookie 的站点，自动签到
+        browser_sites = []  # 有 checkin_url 但没 cookie 的站点，打开浏览器
+
         for site in self.stats_data.get("sites", []):
             checkin_url = site.get("checkin_url", "").strip()
-            if checkin_url:
-                checkin_urls.append((site.get("name", "未命名"), checkin_url))
+            if not checkin_url:
+                continue  # 没有签到网址的不参与
 
-        if not checkin_urls:
+            session_cookie = site.get("session_cookie", "").strip()
+            url = site.get("url", "").strip()
+
+            if session_cookie and url:
+                api_sites.append(site)
+            else:
+                browser_sites.append(site)
+
+        if not api_sites and not browser_sites:
             messagebox.showinfo("提示", "没有配置签到网址的站点\n\n请在「数据统计」中为站点配置签到网址")
             return
 
-        names = [name for name, _ in checkin_urls]
-        if messagebox.askyesno("确认", f"即将打开 {len(checkin_urls)} 个签到页面:\n\n" + "\n".join(names[:10]) + ("\n..." if len(names) > 10 else "")):
-            for name, url in checkin_urls:
-                webbrowser.open(url)
+        # 构建确认信息
+        msg_parts = []
+        if api_sites:
+            msg_parts.append(f"自动签到 {len(api_sites)} 个站点:\n" + "\n".join([f"  - {s.get('name', '未命名')}" for s in api_sites[:5]]) + ("\n  ..." if len(api_sites) > 5 else ""))
+        if browser_sites:
+            msg_parts.append(f"打开浏览器 {len(browser_sites)} 个站点:\n" + "\n".join([f"  - {s.get('name', '未命名')}" for s in browser_sites[:5]]) + ("\n  ..." if len(browser_sites) > 5 else ""))
+
+        if not messagebox.askyesno("确认签到", "\n\n".join(msg_parts)):
+            return
+
+        # 打开浏览器签到
+        for site in browser_sites:
+            webbrowser.open(site.get("checkin_url", ""))
+
+        # 自动 API 签到
+        if api_sites:
+            self.status_var.set("正在自动签到...")
+            threading.Thread(target=self._do_batch_checkin, args=(api_sites,), daemon=True).start()
+
+    def _do_batch_checkin(self, sites):
+        """批量执行自动签到（后台线程）"""
+        results = []
+        total_quota = 0
+
+        for site in sites:
+            site_name = site.get("name", "未命名")
+            site_id = site.get("id", "")
+            base_url = site.get("url", "")
+            session_cookie = site.get("session_cookie", "")
+            user_id = site.get("checkin_user_id", "")
+
+            result = do_checkin(base_url, session_cookie, user_id)
+
+            if result.get("success"):
+                quota = result.get("quota_awarded", 0)
+                # quota 转换为 USD（500000 = $1）
+                quota_usd = round(quota / 500000, 2) if quota else 0
+                total_quota += quota_usd
+                results.append(f"✅ {site_name}: +${quota_usd}")
+
+                # 签到成功后，用 Cookie 查询真实余额并更新
+                balance_result = query_balance_by_cookie(base_url, session_cookie, user_id)
+                if balance_result.get("success"):
+                    new_balance = balance_result.get("balance", 0)
+                    update_site(self.stats_data, site_id, {"balance": new_balance, "balance_unit": "USD"})
+
+                # 记录日志（记录 USD 值）
+                add_checkin_log(site_name, site_id, True, quota_usd, result.get("message", ""))
+            else:
+                results.append(f"❌ {site_name}: {result.get('message', '失败')}")
+                add_checkin_log(site_name, site_id, False, 0, result.get("message", ""))
+
+        # 保存数据
+        save_stats(self.stats_data)
+
+        # 在主线程更新 UI
+        self.root.after(0, lambda: self._show_checkin_results(results, total_quota))
+
+    def _show_checkin_results(self, results, total_quota):
+        """显示签到结果"""
+        self.status_var.set(f"签到完成，共获得 ${total_quota:.2f}")
+
+        # 刷新统计模块
+        if hasattr(self, 'stats_frame'):
+            self.stats_frame.stats_data = self.stats_data
+            self.stats_frame.refresh_site_list()
+            self.stats_frame.update_summary()
+
+        # 显示结果弹窗
+        result_text = "\n".join(results)
+        summary = f"\n\n总计获得: ${total_quota:.2f}"
+        messagebox.showinfo("签到结果", result_text + summary)
+
+    def show_checkin_log(self):
+        """显示签到记录"""
+        logs = load_checkin_log()
+
+        if not logs:
+            messagebox.showinfo("签到记录", "暂无签到记录")
+            return
+
+        # 创建弹窗
+        dialog = ttk.Toplevel(self.root)
+        dialog.title("签到记录")
+        dialog.geometry("600x400")
+        dialog.transient(self.root)
+
+        # 表格
+        columns = ("time", "site", "status", "quota", "message")
+        tree = ttk.Treeview(dialog, columns=columns, show="headings", bootstyle="info")
+        tree.heading("time", text="时间")
+        tree.heading("site", text="站点")
+        tree.heading("status", text="状态")
+        tree.heading("quota", text="获得额度")
+        tree.heading("message", text="信息")
+
+        tree.column("time", width=130)
+        tree.column("site", width=100)
+        tree.column("status", width=60)
+        tree.column("quota", width=80)
+        tree.column("message", width=200)
+
+        scrollbar = ttk.Scrollbar(dialog, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=scrollbar.set)
+
+        tree.pack(side=LEFT, fill=BOTH, expand=YES, padx=(10, 0), pady=10)
+        scrollbar.pack(side=RIGHT, fill=Y, padx=(0, 10), pady=10)
+
+        # 填充数据（最近 100 条）
+        for log in logs[:100]:
+            status = "✅ 成功" if log.get("success") else "❌ 失败"
+            quota = log.get("quota_awarded", 0)
+            tree.insert("", "end", values=(
+                log.get("time", ""),
+                log.get("site_name", ""),
+                status,
+                f"+{quota}" if quota > 0 else "-",
+                log.get("message", "")
+            ))
 
     def open_profile_advanced(self):
         """打开站点高级设置对话框"""
@@ -612,6 +740,71 @@ class ApiQueryApp:
         # 弹出汇总对话框
         threshold = self.config.get("low_balance_threshold", 10)
         BalanceSummaryDialog(self.root, summary_data, low_balance_threshold=threshold)
+
+    def query_all_balance_by_cookie_and_save(self):
+        """使用 Cookie 查询所有站点余额并保存到 stats.json"""
+        sites = self.stats_data.get("sites", [])
+        # 筛选有 session_cookie 的站点
+        cookie_sites = [s for s in sites if s.get("session_cookie", "").strip()]
+
+        if not cookie_sites:
+            messagebox.showwarning("提示", "没有配置 Session Cookie 的站点\n\n请在「数据统计」中为站点配置 Cookie")
+            return
+
+        if not messagebox.askyesno("确认", f"将查询 {len(cookie_sites)} 个站点的余额并保存\n\n继续吗？"):
+            return
+
+        self.status_var.set("正在查询余额...")
+        threading.Thread(target=self._do_batch_balance_query, args=(cookie_sites,), daemon=True).start()
+
+    def _do_batch_balance_query(self, sites):
+        """批量查询余额（后台线程）"""
+        results = []
+        success_count = 0
+        fail_count = 0
+
+        for site in sites:
+            site_name = site.get("name", "未命名")
+            site_id = site.get("id", "")
+            base_url = site.get("url", "")
+            session_cookie = site.get("session_cookie", "")
+            user_id = site.get("checkin_user_id", "")
+
+            self.root.after(0, lambda n=site_name: self.status_var.set(f"正在查询: {n}"))
+
+            result = query_balance_by_cookie(base_url, session_cookie, user_id)
+
+            if result.get("success"):
+                new_balance = result.get("balance", 0)
+                update_site(self.stats_data, site_id, {"balance": new_balance, "balance_unit": "USD"})
+                results.append(f"✅ {site_name}: ${new_balance:.2f}")
+                success_count += 1
+            else:
+                results.append(f"❌ {site_name}: {result.get('message', '查询失败')}")
+                fail_count += 1
+
+        # 保存数据
+        save_stats(self.stats_data)
+
+        # 在主线程更新 UI
+        self.root.after(0, lambda: self._show_balance_query_results(results, success_count, fail_count))
+
+    def _show_balance_query_results(self, results, success_count, fail_count):
+        """显示余额查询结果"""
+        self.status_var.set(f"查询完成: {success_count} 成功, {fail_count} 失败")
+
+        # 刷新列表
+        self.refresh_profile_list()
+
+        # 刷新统计模块
+        if hasattr(self, 'stats_frame'):
+            self.stats_frame.stats_data = self.stats_data
+            self.stats_frame.refresh_site_list()
+            self.stats_frame.update_summary()
+
+        # 显示结果弹窗
+        result_text = "\n".join(results)
+        messagebox.showinfo("余额查询结果", result_text)
 
     def extract_site_summary(self, name, result):
         """从查询结果中提取站点汇总数据"""

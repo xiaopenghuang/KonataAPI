@@ -17,6 +17,7 @@ from konata_api.stats import (
     create_balance_bar_chart, create_type_stats_chart,
     SITE_TYPE_PAID, SITE_TYPE_FREE, SITE_TYPE_SUBSCRIPTION, SITE_TYPE_LABELS
 )
+from konata_api.api import query_balance_by_cookie
 
 
 class StatsFrame(ttk.Frame):
@@ -49,12 +50,20 @@ class StatsFrame(ttk.Frame):
 
     def set_current_site(self, site_info: dict):
         """设置当前站点（从外部调用）"""
-        # 查找或创建对应的站点
+        site_id = site_info.get("id", "")
         url = site_info.get("url", "").rstrip("/")
         name = site_info.get("name", "")
         api_key = site_info.get("api_key", "")
 
-        # 在 stats_data 中查找
+        # 优先按 ID 查找
+        if site_id:
+            site = get_site_by_id(self.stats_data, site_id)
+            if site:
+                self.current_site_id = site["id"]
+                self.load_site_to_form(site)
+                return
+
+        # 如果没有 ID，按 URL 查找（兼容旧逻辑）
         for site in self.stats_data.get("sites", []):
             if site.get("url", "").rstrip("/") == url:
                 self.current_site_id = site["id"]
@@ -186,6 +195,7 @@ class StatsFrame(ttk.Frame):
         ttk.Label(row2, text="URL:", width=10).pack(side=LEFT)
         self.url_var = ttk.StringVar()
         ttk.Entry(row2, textvariable=self.url_var, width=30).pack(side=LEFT, fill=X, expand=YES)
+        ttk.Button(row2, text="🌐", command=self.open_site_url, bootstyle="info-outline", width=3).pack(side=LEFT, padx=(5, 0))
 
         # 类型
         row3 = ttk.Frame(form_frame)
@@ -209,7 +219,10 @@ class StatsFrame(ttk.Frame):
         row4b.pack(fill=X, pady=(0, 8))
         ttk.Label(row4b, text="API Key:", width=10).pack(side=LEFT)
         self.api_key_var = ttk.StringVar()
-        ttk.Entry(row4b, textvariable=self.api_key_var, width=30, show="*").pack(side=LEFT, fill=X, expand=YES)
+        self.api_key_entry = ttk.Entry(row4b, textvariable=self.api_key_var, width=30, show="*")
+        self.api_key_entry.pack(side=LEFT, fill=X, expand=YES)
+        self.api_key_show = False
+        ttk.Button(row4b, text="👁", command=self.toggle_show_key, bootstyle="secondary-outline", width=3).pack(side=LEFT, padx=(5, 0))
 
         # 余额（可编辑）
         row5 = ttk.Frame(form_frame)
@@ -246,6 +259,26 @@ class StatsFrame(ttk.Frame):
         self.checkin_url_var = ttk.StringVar()
         ttk.Entry(row8, textvariable=self.checkin_url_var, width=30).pack(side=LEFT, fill=X, expand=YES)
         ttk.Button(row8, text="🔗", command=self.open_checkin_url, bootstyle="info-outline", width=3).pack(side=LEFT, padx=(5, 0))
+
+        # Session Cookie（用于自动签到）
+        row9 = ttk.Frame(form_frame)
+        row9.pack(fill=X, pady=(0, 8))
+        ttk.Label(row9, text="签到Cookie:", width=10).pack(side=LEFT)
+        self.session_cookie_var = ttk.StringVar()
+        self.cookie_entry = ttk.Entry(row9, textvariable=self.session_cookie_var, width=30, show="*")
+        self.cookie_entry.pack(side=LEFT, fill=X, expand=YES)
+        self.cookie_show = False
+        ttk.Button(row9, text="👁", command=self.toggle_show_cookie, bootstyle="secondary-outline", width=3).pack(side=LEFT, padx=(3, 0))
+        ttk.Button(row9, text="📋", command=self.copy_cookie_script, bootstyle="info-outline", width=3).pack(side=LEFT, padx=(3, 0))
+        ttk.Button(row9, text="💰", command=self.query_balance_by_cookie, bootstyle="success-outline", width=3).pack(side=LEFT, padx=(3, 0))
+
+        # 签到 User ID（某些站点需要）
+        row10 = ttk.Frame(form_frame)
+        row10.pack(fill=X, pady=(0, 8))
+        ttk.Label(row10, text="签到UserID:", width=10).pack(side=LEFT)
+        self.checkin_user_id_var = ttk.StringVar()
+        ttk.Entry(row10, textvariable=self.checkin_user_id_var, width=15).pack(side=LEFT)
+        ttk.Label(row10, text="(部分站点需要)", bootstyle="secondary", font=("Microsoft YaHei", 8)).pack(side=LEFT, padx=(5, 0))
 
         # 保存按钮
         btn_frame = ttk.Frame(form_frame)
@@ -400,6 +433,12 @@ class StatsFrame(ttk.Frame):
         # 签到网址
         self.checkin_url_var.set(site.get("checkin_url", ""))
 
+        # Session Cookie
+        self.session_cookie_var.set(site.get("session_cookie", ""))
+
+        # 签到 User ID
+        self.checkin_user_id_var.set(site.get("checkin_user_id", ""))
+
         # 充值记录
         self.refresh_recharge_list(site)
 
@@ -448,7 +487,9 @@ class StatsFrame(ttk.Frame):
             "notes": self.notes_text.get("1.0", "end").strip(),
             "balance": balance,
             "balance_unit": balance_unit,
-            "checkin_url": self.checkin_url_var.get().strip()
+            "checkin_url": self.checkin_url_var.get().strip(),
+            "session_cookie": self.session_cookie_var.get().strip(),
+            "checkin_user_id": self.checkin_user_id_var.get().strip(),
         }
 
         if update_site(self.stats_data, self.current_site_id, updates):
@@ -508,6 +549,8 @@ class StatsFrame(ttk.Frame):
         self.last_query_label.config(text="-")
         self.notes_text.delete("1.0", "end")
         self.checkin_url_var.set("")
+        self.session_cookie_var.set("")
+        self.checkin_user_id_var.set("")
         if hasattr(self, 'recharge_tree'):
             self.recharge_tree.delete(*self.recharge_tree.get_children())
 
@@ -552,6 +595,162 @@ class StatsFrame(ttk.Frame):
             webbrowser.open(checkin_url)
         else:
             messagebox.showwarning("提示", "该站点没有配置签到网址")
+
+    def toggle_show_key(self):
+        """切换显示/隐藏 API Key"""
+        self.api_key_show = not self.api_key_show
+        self.api_key_entry.config(show="" if self.api_key_show else "*")
+
+    def toggle_show_cookie(self):
+        """切换显示/隐藏 Cookie"""
+        self.cookie_show = not self.cookie_show
+        self.cookie_entry.config(show="" if self.cookie_show else "*")
+
+    def query_balance_by_cookie(self):
+        """使用 Cookie 查询余额"""
+        url = self.url_var.get().strip()
+        cookie = self.session_cookie_var.get().strip()
+        user_id = self.checkin_user_id_var.get().strip()
+
+        if not url:
+            messagebox.showwarning("提示", "请先填写站点 URL")
+            return
+        if not cookie:
+            messagebox.showwarning("提示", "请先填写签到 Cookie")
+            return
+
+        # 查询余额
+        result = query_balance_by_cookie(url, cookie, user_id)
+
+        if result.get("success"):
+            balance = result.get("balance", 0)
+            username = result.get("username", "")
+            display_name = result.get("display_name", "")
+
+            # 更新余额到表单
+            self.balance_var.set(str(balance))
+            self.balance_unit_var.set("USD")
+
+            # 保存到站点数据
+            if self.current_site_id:
+                update_site(self.stats_data, self.current_site_id, {
+                    "balance": balance,
+                    "balance_unit": "USD"
+                })
+                save_stats(self.stats_data)
+                self.refresh_site_list()
+                self.update_summary()
+
+            msg = f"查询成功！\n\n用户: {display_name or username}\n余额: ${balance:.2f}"
+            messagebox.showinfo("Cookie 查询余额", msg)
+        else:
+            messagebox.showerror("查询失败", result.get("message", "未知错误"))
+
+    def copy_cookie_script(self):
+        """打开网站并提示用户如何获取 Cookie"""
+        # 打开网站
+        url = self.url_var.get().strip()
+        if url:
+            webbrowser.open(url)
+
+        # 弹出获取指南
+        guide = (
+            "请按以下步骤获取 Cookie：\n\n"
+            "1. 在浏览器中登录网站\n"
+            "2. 按 F12 打开开发者工具\n"
+            "3. 切换到「网络」(Network) 标签\n"
+            "4. 刷新页面 (F5)\n"
+            "5. 右键点击任意请求\n"
+            "6. 选择「复制」→「复制为 cURL (bash)」\n"
+            "7. 点击下方「粘贴并解析」按钮"
+        )
+
+        # 创建带「粘贴解析」按钮的对话框
+        dialog = ttk.Toplevel(self.master)
+        dialog.title("获取 Cookie 指南")
+        dialog.geometry("400x280")
+        dialog.transient(self.master)
+        dialog.grab_set()
+
+        ttk.Label(dialog, text=guide, justify=LEFT, font=("Microsoft YaHei", 10)).pack(padx=15, pady=15, anchor=W)
+
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(fill=X, padx=15, pady=(0, 15))
+
+        def paste_and_parse():
+            """从剪贴板粘贴并解析"""
+            try:
+                text = self.master.clipboard_get()
+                self._parse_cookie_text(text)
+                dialog.destroy()
+            except:
+                messagebox.showwarning("提示", "剪贴板为空或无法读取")
+
+        ttk.Button(btn_frame, text="📋 粘贴并解析", command=paste_and_parse, bootstyle="success", width=15).pack(side=LEFT, padx=(0, 10))
+        ttk.Button(btn_frame, text="关闭", command=dialog.destroy, bootstyle="secondary", width=10).pack(side=LEFT)
+
+    def _parse_cookie_text(self, text):
+        """解析粘贴的文本，提取 Cookie 和 UserID（支持 cURL 格式）"""
+        import re
+
+        cookie = ""
+        user_id = ""
+
+        # 1. 尝试从 cURL 命令中提取 -b 'xxx' 或 --cookie 'xxx'
+        curl_cookie = re.search(r"-b\s+['\"]([^'\"]+)['\"]", text)
+        if not curl_cookie:
+            curl_cookie = re.search(r"--cookie\s+['\"]([^'\"]+)['\"]", text)
+        if curl_cookie:
+            cookie = curl_cookie.group(1).strip()
+
+        # 2. 尝试从 cURL 命令中提取 new-api-user header
+        curl_uid = re.search(r"-H\s+['\"]new-api-user:\s*(\d+)['\"]", text, re.IGNORECASE)
+        if curl_uid:
+            user_id = curl_uid.group(1).strip()
+
+        # 3. 如果不是 cURL 格式，尝试匹配 "Cookie: xxx" 格式
+        if not cookie:
+            cookie_match = re.search(r'Cookie[:\s]+([^\n]+)', text, re.IGNORECASE)
+            if cookie_match:
+                cookie = cookie_match.group(1).strip()
+
+        # 4. 尝试匹配 "UserID: xxx" 格式
+        if not user_id:
+            uid_match = re.search(r'(?:UserID|new-api-user)[:\s]+(\d+)', text, re.IGNORECASE)
+            if uid_match:
+                user_id = uid_match.group(1).strip()
+
+        # 5. 如果没匹配到，可能直接粘贴的就是 Cookie 值
+        if not cookie and 'session=' in text:
+            # 提取 session=xxx 部分
+            session_match = re.search(r'(session=[^\s;]+)', text)
+            if session_match:
+                cookie = text.strip() if len(text) < 500 else session_match.group(1)
+
+        # 填充到输入框
+        if cookie:
+            self.session_cookie_var.set(cookie)
+        if user_id:
+            self.checkin_user_id_var.set(user_id)
+
+        if cookie or user_id:
+            msg = "已填充：\n"
+            if cookie:
+                display_cookie = cookie[:60] + '...' if len(cookie) > 60 else cookie
+                msg += f"• Cookie: {display_cookie}\n"
+            if user_id:
+                msg += f"• UserID: {user_id}"
+            messagebox.showinfo("解析成功", msg)
+        else:
+            messagebox.showwarning("解析失败", "未能识别 Cookie 或 UserID\n\n请确保复制了 cURL 命令或 Cookie 内容")
+
+    def open_site_url(self):
+        """打开当前站点的网址"""
+        url = self.url_var.get().strip()
+        if url:
+            webbrowser.open(url)
+        else:
+            messagebox.showwarning("提示", "该站点没有配置网址")
 
     def add_recharge(self):
         """添加充值记录"""

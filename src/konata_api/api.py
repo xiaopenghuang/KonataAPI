@@ -311,6 +311,175 @@ def query_logs(
         return {"error": str(e)}
 
 
+def do_checkin(base_url: str, session_cookie: str, user_id: str = "") -> dict:
+    """
+    执行签到（使用 Session Cookie 认证）
+
+    Args:
+        base_url: API 基础地址
+        session_cookie: 浏览器 Session Cookie（包含 session=xxx 等）
+        user_id: 用户 ID（某些站点需要 new-api-user Header）
+
+    Returns:
+        dict: 签到结果
+            - success: 是否成功
+            - message: 提示信息
+            - quota_awarded: 获得的额度（成功时）
+            - checkin_date: 签到日期（成功时）
+    """
+    base = base_url.rstrip("/")
+    headers = {
+        "Accept": "application/json, text/plain, */*",
+        "Content-Type": "application/json",
+        "Cookie": session_cookie,
+    }
+    if user_id:
+        headers["new-api-user"] = user_id
+
+    try:
+        resp = requests.post(f"{base}/api/user/checkin", headers=headers, timeout=15)
+
+        # 检查响应内容类型，判断是否被 Cloudflare 拦截
+        content_type = resp.headers.get("Content-Type", "")
+        response_text = resp.text
+
+        # 检测 Cloudflare 拦截
+        if "text/html" in content_type or response_text.strip().startswith("<!DOCTYPE") or response_text.strip().startswith("<html"):
+            if "cf-" in response_text.lower() or "cloudflare" in response_text.lower() or "challenge" in response_text.lower():
+                return {"success": False, "message": "被 Cloudflare 拦截，请更新 Cookie（含 cf_clearance）"}
+            else:
+                return {"success": False, "message": "返回 HTML 页面，可能 Cookie 已过期"}
+
+        # 检查空响应
+        if not response_text.strip():
+            return {"success": False, "message": "API 返回空响应，请检查 Cookie 是否有效"}
+
+        # 尝试解析 JSON
+        try:
+            data = resp.json()
+        except ValueError:
+            # JSON 解析失败，返回部分响应内容
+            preview = response_text[:100] if len(response_text) > 100 else response_text
+            return {"success": False, "message": f"API 返回非 JSON: {preview}"}
+
+        if data.get("success"):
+            return {
+                "success": True,
+                "message": data.get("message", "签到成功"),
+                "quota_awarded": data.get("data", {}).get("quota_awarded", 0),
+                "checkin_date": data.get("data", {}).get("checkin_date", ""),
+            }
+        else:
+            return {
+                "success": False,
+                "message": data.get("message", "签到失败"),
+            }
+    except requests.exceptions.Timeout:
+        return {"success": False, "message": "请求超时，请检查网络"}
+    except requests.exceptions.ConnectionError:
+        return {"success": False, "message": "连接失败，请检查网络或站点是否可访问"}
+    except requests.exceptions.RequestException as e:
+        return {"success": False, "message": f"网络错误: {str(e)}"}
+
+
+def get_checkin_status(base_url: str, session_cookie: str, month: str = None) -> dict:
+    """
+    获取签到状态（使用 Session Cookie 认证）
+
+    Args:
+        base_url: API 基础地址
+        session_cookie: 浏览器 Session Cookie
+        month: 月份（格式 2026-02），默认当前月
+
+    Returns:
+        dict: 签到状态信息
+    """
+    from datetime import datetime
+
+    base = base_url.rstrip("/")
+    if not month:
+        month = datetime.now().strftime("%Y-%m")
+
+    headers = {
+        "Accept": "application/json, text/plain, */*",
+        "Cookie": session_cookie,
+    }
+
+    try:
+        resp = requests.get(f"{base}/api/user/checkin", headers=headers, params={"month": month}, timeout=15)
+        data = resp.json()
+
+        if data.get("success"):
+            return {
+                "success": True,
+                "data": data.get("data", {}),
+            }
+        else:
+            return {
+                "success": False,
+                "message": data.get("message", "获取签到状态失败"),
+            }
+    except requests.exceptions.RequestException as e:
+        return {"success": False, "message": f"网络错误: {str(e)}"}
+    except ValueError:
+        return {"success": False, "message": "API 返回非 JSON 格式"}
+
+
+def query_balance_by_cookie(base_url: str, session_cookie: str, user_id: str = "") -> dict:
+    """
+    使用 Cookie 查询用户余额（通过 /api/user/self 接口）
+
+    Args:
+        base_url: API 基础地址
+        session_cookie: 浏览器 Session Cookie
+        user_id: 用户 ID（某些站点需要 new-api-user Header）
+
+    Returns:
+        dict: 用户信息，包含余额
+            - success: 是否成功
+            - balance: 余额（quota 转换为 USD）
+            - username: 用户名
+            - email: 邮箱
+            - raw_data: 原始返回数据
+    """
+    base = base_url.rstrip("/")
+    headers = {
+        "Accept": "application/json, text/plain, */*",
+        "Cookie": session_cookie,
+    }
+    if user_id:
+        headers["new-api-user"] = user_id
+
+    try:
+        resp = requests.get(f"{base}/api/user/self", headers=headers, timeout=15)
+        data = resp.json()
+
+        if data.get("success") and "data" in data:
+            user_data = data["data"]
+            # quota 通常是以 500000 为 1 USD 的单位
+            quota = user_data.get("quota", 0)
+            balance = quota / 500000 if quota else 0
+
+            return {
+                "success": True,
+                "balance": round(balance, 2),
+                "quota": quota,
+                "username": user_data.get("username", ""),
+                "email": user_data.get("email", ""),
+                "display_name": user_data.get("display_name", ""),
+                "raw_data": user_data,
+            }
+        else:
+            return {
+                "success": False,
+                "message": data.get("message", "获取用户信息失败"),
+            }
+    except requests.exceptions.RequestException as e:
+        return {"success": False, "message": f"网络错误: {str(e)}"}
+    except ValueError:
+        return {"success": False, "message": "API 返回非 JSON 格式"}
+
+
 if __name__ == "__main__":
     # 测试用法示例
     # test_key = "sk-your-api-key"

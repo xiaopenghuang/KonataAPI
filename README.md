@@ -23,7 +23,11 @@
 - **站点测试模块** - 连通性测试、Claude 真伪性检测、原生对话
   - **多种 API 预设** - 支持原生 Anthropic/OpenAI、中转站格式、Claude CLI 真实格式
   - **Claude CLI 真实格式** - 完全模拟 Claude Code CLI 请求，可绕过部分中转站验证
-- **一键签到功能** - 配置签到网址，批量打开所有签到页面
+- **一键签到功能** - 支持自动 API 签到和浏览器签到两种方式
+  - 配置 Cookie 的站点自动调用 API 签到
+  - 未配置 Cookie 的站点打开浏览器手动签到
+  - 签到结果自动更新余额，签到日志可查看
+- **Cookie 查询余额** - 使用 Cookie 直接查询账户余额（无需 API Key）
 ![alt text](assets/连通性测试.png)
 ![alt text](assets/真伪性测试.png)
 
@@ -46,8 +50,11 @@
 
 **左侧列表操作按钮：**
 - **➕ 添加站点** - 新建站点，自动跳转到数据统计编辑
-- **🔄 查询全部余额** - 批量查询所有站点余额
-- **🎁 一键签到** - 打开所有配置了签到网址的站点
+- **🔄 刷新列表** - 刷新站点列表
+- **💰 查询全部余额** - 批量查询所有站点余额（使用 API Key）
+- **🍪 Cookie查余额并保存** - 使用 Cookie 批量查询余额并自动保存到站点数据
+- **🎁 一键签到** - 自动签到所有配置了签到网址的站点
+- **📋 签到记录** - 查看签到历史记录
 - **🗑️ 删除选中** - 删除当前选中的站点
 
 
@@ -126,9 +133,23 @@ python main.py
 ### 一键签到
 
 1. 在「📊 数据统计」标签页选择站点
-2. 填写「签到网址」（如 `https://xxx.com/user/checkin`）
-3. 点击「保存修改」
-4. 点击左侧「🎁 一键签到」批量打开所有配置了签到网址的站点
+2. 填写「签到网址」（如 `https://xxx.com/console/personal`）
+3. （可选）填写「签到Cookie」和「签到UserID」实现自动签到
+   - 点击 📋 按钮获取 Cookie 的方法指引
+   - 从浏览器 F12 → 网络 → 右键复制 cURL 命令 → 粘贴解析
+4. 点击「💾 保存修改」
+5. 点击左侧「🎁 一键签到」执行签到
+   - 有 Cookie 的站点：自动调用 API 签到，结果自动更新余额
+   - 无 Cookie 的站点：打开浏览器手动签到
+6. 点击「📋 签到记录」查看历史签到日志
+
+### Cookie 查询余额
+
+对于支持 Cookie 认证的站点，可以直接用 Cookie 查询余额：
+
+1. 在站点的「签到Cookie」和「签到UserID」字段填入信息
+2. 点击 💰 按钮查询余额
+3. 余额会自动更新到站点数据中
 
 ### 高级接口设置
 
@@ -197,7 +218,9 @@ python main.py
       "tags": ["claude", "gpt"],
       "balance": 100.0,
       "balance_unit": "USD",
-      "checkin_url": "https://example.com/user/checkin",
+      "checkin_url": "https://example.com/console/personal",
+      "session_cookie": "session=xxx; cf_clearance=xxx",
+      "checkin_user_id": "123",
       "notes": "备注信息",
       "balance_auth_type": "bearer",
       "log_auth_type": "url_key",
@@ -228,7 +251,9 @@ python main.py
 - `tags` - 标签列表
 - `balance` - 当前余额（手动记录）
 - `balance_unit` - 余额单位
-- `checkin_url` - 签到网址（用于一键签到）
+- `checkin_url` - 签到网址（用于一键签到，必填才会参与签到）
+- `session_cookie` - 签到 Cookie（用于自动 API 签到）
+- `checkin_user_id` - 签到用户 ID（部分站点需要 new-api-user Header）
 - `notes` - 备注信息
 - `balance_auth_type` - 余额查询认证方式（`bearer` / `url_key`）
 - `log_auth_type` - 日志查询认证方式（`bearer` / `url_key`）

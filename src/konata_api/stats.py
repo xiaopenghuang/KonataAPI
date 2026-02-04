@@ -40,6 +40,73 @@ def get_stats_path() -> str:
     return os.path.join(get_exe_dir(), "config", "stats.json")
 
 
+def get_checkin_log_path() -> str:
+    """获取签到日志文件路径"""
+    return os.path.join(get_exe_dir(), "config", "checkin_log.json")
+
+
+def load_checkin_log() -> list:
+    """加载签到日志"""
+    path = get_checkin_log_path()
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
+    return []
+
+
+def save_checkin_log(logs: list) -> bool:
+    """保存签到日志"""
+    path = get_checkin_log_path()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(logs, f, ensure_ascii=False, indent=2)
+        return True
+    except IOError:
+        return False
+
+
+def add_checkin_log(site_name: str, site_id: str, success: bool, quota_awarded: float = 0, message: str = "") -> dict:
+    """
+    添加签到日志记录
+
+    Args:
+        site_name: 站点名称
+        site_id: 站点ID
+        success: 是否成功
+        quota_awarded: 获得的额度
+        message: 提示信息
+
+    Returns:
+        新增的日志记录
+    """
+    logs = load_checkin_log()
+    record = {
+        "id": f"chk-{uuid.uuid4().hex[:6]}",
+        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "site_name": site_name,
+        "site_id": site_id,
+        "success": success,
+        "quota_awarded": quota_awarded,
+        "message": message,
+    }
+    logs.insert(0, record)  # 最新的在前面
+    # 只保留最近 500 条
+    logs = logs[:500]
+    save_checkin_log(logs)
+    return record
+
+
+def get_today_checkin_sites() -> set:
+    """获取今天已签到的站点ID集合"""
+    logs = load_checkin_log()
+    today = datetime.now().strftime("%Y-%m-%d")
+    return {log["site_id"] for log in logs if log.get("time", "").startswith(today) and log.get("success")}
+
+
 def load_stats() -> dict:
     """加载统计数据"""
     path = get_stats_path()
