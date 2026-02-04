@@ -15,9 +15,10 @@ from konata_api.api import query_balance, query_logs
 from konata_api.utils import (
     get_exe_dir, resource_path, load_config, save_config
 )
-from konata_api.dialogs import SettingsDialog, RawResponseDialog, ProfileAdvancedDialog, BalanceSummaryDialog
+from konata_api.dialogs import SettingsDialog, RawResponseDialog, BalanceSummaryDialog, ProfileAdvancedDialog
 from konata_api.tray import TrayIcon
 from konata_api.stats_dialog import StatsFrame
+from konata_api.stats import load_stats, save_stats, get_site_by_id
 from konata_api.test_dialog import TestFrame
 
 
@@ -68,27 +69,32 @@ class ApiQueryApp:
         main_frame = ttk.Frame(self.root, padding=10)
         main_frame.place(x=20, y=20, relwidth=1, relheight=1, width=-40, height=-40)
 
-        # === 左侧：配置列表 ===
+        # === 左侧：中转站列表（数据源：stats.json） ===
         left_frame = ttk.Labelframe(main_frame, text=" 中转站列表 ", padding=15, bootstyle="info")
         left_frame.pack(side=LEFT, fill=Y, padx=(0, 15))
 
-        # 配置列表 Treeview
-        columns = ("name", "url")
+        # 站点列表 Treeview
+        columns = ("name", "balance")
         self.profile_tree = ttk.Treeview(left_frame, columns=columns, show="headings", height=18, bootstyle="info")
-        self.profile_tree.heading("name", text="名称")
-        self.profile_tree.heading("url", text="地址")
-        self.profile_tree.column("name", width=90)
-        self.profile_tree.column("url", width=170)
+        self.profile_tree.heading("name", text="名称", command=lambda: self.sort_profile_list("name"))
+        self.profile_tree.heading("balance", text="余额 ↓", command=lambda: self.sort_profile_list("balance"))
+        self.profile_tree.column("name", width=140)
+        self.profile_tree.column("balance", width=120)
         self.profile_tree.pack(fill=BOTH, expand=YES)
         self.profile_tree.bind("<<TreeviewSelect>>", self.on_profile_select)
-        self.profile_tree.bind("<Double-1>", self.on_profile_double_click)
+
+        # 排序状态：字段名 + 是否降序
+        self._sort_key = "balance"
+        self._sort_reverse = True
 
         # 列表操作按钮
         list_btn_frame = ttk.Frame(left_frame)
         list_btn_frame.pack(fill=X, pady=(15, 0))
-        ttk.Button(list_btn_frame, text="🔄 查询全部余额", command=self.query_all_balance, bootstyle="success-outline", width=20).pack(fill=X, pady=3)
-        ttk.Button(list_btn_frame, text="⚙️ 高级设置", command=self.open_profile_advanced, bootstyle="info-outline", width=20).pack(fill=X, pady=3)
-        ttk.Button(list_btn_frame, text="🗑️ 删除选中", command=self.delete_profile, bootstyle="danger-outline", width=20).pack(fill=X, pady=3)
+        ttk.Button(list_btn_frame, text="➕ 添加站点", command=self.add_site_from_list, bootstyle="success-outline", width=20).pack(fill=X, pady=3)
+        ttk.Button(list_btn_frame, text="🔄 刷新列表", command=self.refresh_profile_list, bootstyle="secondary-outline", width=20).pack(fill=X, pady=3)
+        ttk.Button(list_btn_frame, text="💰 查询全部余额", command=self.query_all_balance, bootstyle="info-outline", width=20).pack(fill=X, pady=3)
+        ttk.Button(list_btn_frame, text="🎁 一键签到", command=self.open_all_checkin_from_list, bootstyle="warning-outline", width=20).pack(fill=X, pady=3)
+        ttk.Button(list_btn_frame, text="🗑️ 删除选中", command=self.delete_site_from_list, bootstyle="danger-outline", width=20).pack(fill=X, pady=3)
 
         # === 右侧：主 Notebook 标签页 ===
         right_frame = ttk.Frame(main_frame)
@@ -113,22 +119,22 @@ class ApiQueryApp:
         self.main_notebook = ttk.Notebook(right_frame, bootstyle="primary", style="Big.TNotebook")
         self.main_notebook.pack(fill=BOTH, expand=YES)
 
-        # Tab 1: 查询
+        # Tab 1: 数据统计
+        stats_tab = ttk.Frame(self.main_notebook, padding=5)
+        self.main_notebook.add(stats_tab, text="  📊 数据统计  ")
+        self.stats_frame = StatsFrame(stats_tab, profiles=self.config.get("profiles", []), show_site_list=False, on_save_callback=self.on_stats_save)
+        self.stats_frame.pack(fill=BOTH, expand=YES)
+
+        # Tab 2: 余额查询
         query_tab = ttk.Frame(self.main_notebook, padding=5)
         self.main_notebook.add(query_tab, text="  💰 余额查询  ")
         self.create_query_tab(query_tab)
 
-        # Tab 2: 测试
+        # Tab 3: 站点测试
         test_tab = ttk.Frame(self.main_notebook, padding=5)
         self.main_notebook.add(test_tab, text="  🧪 站点测试  ")
         self.test_frame = TestFrame(test_tab, show_site_list=False)
         self.test_frame.pack(fill=BOTH, expand=YES)
-
-        # Tab 3: 统计
-        stats_tab = ttk.Frame(self.main_notebook, padding=5)
-        self.main_notebook.add(stats_tab, text="  📊 数据统计  ")
-        self.stats_frame = StatsFrame(stats_tab, profiles=self.config.get("profiles", []), show_site_list=False)
-        self.stats_frame.pack(fill=BOTH, expand=YES)
 
         # === 状态栏 ===
         self.status_var = ttk.StringVar(value="就绪 - 双击左侧列表选择配置，或手动输入新配置")
@@ -146,8 +152,8 @@ class ApiQueryApp:
         name_frame.pack(fill=X, pady=5)
         ttk.Label(name_frame, text="配置名称:", width=12).pack(side=LEFT)
         self.name_var = ttk.StringVar()
-        ttk.Entry(name_frame, textvariable=self.name_var, width=25, bootstyle="info").pack(side=LEFT, padx=(0, 10))
-        ttk.Button(name_frame, text="💾 保存配置", command=self.save_profile, bootstyle="success", width=12).pack(side=RIGHT)
+        ttk.Entry(name_frame, textvariable=self.name_var, width=25, bootstyle="info", state="readonly").pack(side=LEFT, padx=(0, 10))
+        ttk.Button(name_frame, text="⚙️ 高级设置", command=self.open_profile_advanced, bootstyle="secondary-outline", width=12).pack(side=RIGHT)
 
         # Base URL
         url_frame = ttk.Frame(config_frame)
@@ -265,62 +271,117 @@ class ApiQueryApp:
             self._resize_after_id = self.root.after(100, self.update_background)
 
     def refresh_profile_list(self):
-        """刷新配置列表"""
+        """刷新站点列表（数据源：stats.json）"""
         for item in self.profile_tree.get_children():
             self.profile_tree.delete(item)
 
-        for p in self.config.get("profiles", []):
-            name = p.get("name", "未命名")
-            url = p.get("url", "")
-            url_display = url.replace("https://", "").replace("http://", "")[:25]
-            if len(url) > 30:
-                url_display += "..."
-            self.profile_tree.insert("", "end", values=(name, url_display))
+        self.stats_data = load_stats()
+        sites = self.stats_data.get("sites", [])
+
+        # 排序
+        sort_key = getattr(self, '_sort_key', 'balance')
+        sort_reverse = getattr(self, '_sort_reverse', True)
+
+        if sort_key == "balance":
+            sites_sorted = sorted(sites, key=lambda s: s.get("balance", 0), reverse=sort_reverse)
+        else:
+            sites_sorted = sorted(sites, key=lambda s: s.get("name", "").lower(), reverse=sort_reverse)
+
+        for site in sites_sorted:
+            name = site.get("name", "未命名")
+            balance = site.get("balance", 0)
+            unit = site.get("balance_unit", "USD")
+            if unit == "USD":
+                balance_display = f"${balance:.2f}"
+            else:
+                balance_display = f"{balance:,.0f} {unit}"
+            self.profile_tree.insert("", "end", iid=site["id"], values=(name, balance_display))
+
+        # 同步更新 stats_frame 的数据引用
+        if hasattr(self, 'stats_frame'):
+            self.stats_frame.stats_data = self.stats_data
+            self.stats_frame.update_summary()
+
+    def sort_profile_list(self, key):
+        """切换排序方式"""
+        if self._sort_key == key:
+            # 同一列，切换升降序
+            self._sort_reverse = not self._sort_reverse
+        else:
+            # 不同列，默认降序（余额）或升序（名称）
+            self._sort_key = key
+            self._sort_reverse = (key == "balance")
+
+        # 更新表头显示
+        if key == "balance":
+            arrow = "↓" if self._sort_reverse else "↑"
+            self.profile_tree.heading("balance", text=f"余额 {arrow}")
+            self.profile_tree.heading("name", text="名称")
+        else:
+            arrow = "↓" if self._sort_reverse else "↑"
+            self.profile_tree.heading("name", text=f"名称 {arrow}")
+            self.profile_tree.heading("balance", text="余额")
+
+        self.refresh_profile_list()
+
+    def on_stats_save(self):
+        """数据统计模块保存后的回调"""
+        # 保存当前选中的站点 ID
+        selection = self.profile_tree.selection()
+        current_id = selection[0] if selection else None
+
+        # 刷新列表
+        self.refresh_profile_list()
+
+        # 恢复选中状态
+        if current_id:
+            try:
+                self.profile_tree.selection_set(current_id)
+                # 更新 _current_site 引用
+                site = get_site_by_id(self.stats_data, current_id)
+                if site:
+                    self._current_site = site
+            except:
+                pass
+
+        self.status_var.set("✅ 站点信息已更新")
 
     def on_profile_select(self, event):
-        """单击选择配置"""
-        pass
-
-    def on_profile_double_click(self, event):
-        """双击加载配置"""
+        """单击选择站点，同步到各模块"""
         selection = self.profile_tree.selection()
-        if selection:
-            idx = self.profile_tree.index(selection[0])
-            self.load_profile(idx)
-            self.status_var.set(f"✅ 已加载配置: {self.name_var.get()}")
-
-            # 同步到测试和统计模块
-            self._sync_site_to_modules()
-
-    def load_profile(self, idx):
-        """加载指定配置"""
-        profiles = self.config.get("profiles", [])
-        if idx < len(profiles):
-            p = profiles[idx]
-            self.name_var.set(p.get("name", ""))
-            self.url_var.set(p.get("url", ""))
-            self.key_var.set(p.get("key", ""))
-            # 保存当前 profile 的额外配置（auth_type, endpoints, proxy, jwt_token）
-            old_auth_type = p.get("auth_type", "bearer")
-            self._current_profile_balance_auth_type = p.get("balance_auth_type", old_auth_type)
-            self._current_profile_log_auth_type = p.get("log_auth_type", "url_key")
-            self._current_profile_endpoints = p.get("endpoints", {})
-            self._current_profile_proxy = p.get("proxy", "")
-            self._current_profile_jwt_token = p.get("jwt_token", "")
-            # 保存当前 profile 引用
-            self._current_profile = p
-
-    def _sync_site_to_modules(self):
-        """同步当前选中的站点到测试和统计模块"""
-        if not hasattr(self, '_current_profile'):
+        if not selection:
             return
 
-        p = self._current_profile
+        site_id = selection[0]
+        site = get_site_by_id(self.stats_data, site_id)
+        if site:
+            self._current_site = site
+            self._sync_site_to_modules()
+            self.status_var.set(f"✅ 已选择: {site.get('name', '')}")
+
+    def _sync_site_to_modules(self):
+        """同步当前选中的站点到各模块"""
+        if not hasattr(self, '_current_site'):
+            return
+
+        site = self._current_site
         site_info = {
-            "name": p.get("name", ""),
-            "url": p.get("url", ""),
-            "api_key": p.get("key", ""),
+            "id": site.get("id", ""),
+            "name": site.get("name", ""),
+            "url": site.get("url", ""),
+            "api_key": site.get("api_key", ""),
         }
+
+        # 同步到余额查询模块
+        self.name_var.set(site.get("name", ""))
+        self.url_var.set(site.get("url", ""))
+        self.key_var.set(site.get("api_key", ""))
+
+        # 加载站点的高级设置
+        self._current_profile_balance_auth_type = site.get("balance_auth_type", "bearer")
+        self._current_profile_log_auth_type = site.get("log_auth_type", "url_key")
+        self._current_profile_endpoints = site.get("endpoints", {})
+        self._current_profile_proxy = site.get("proxy", "")
 
         # 同步到测试模块
         if hasattr(self, 'test_frame'):
@@ -330,95 +391,107 @@ class ApiQueryApp:
         if hasattr(self, 'stats_frame'):
             self.stats_frame.set_current_site(site_info)
 
-    def save_profile(self):
-        """保存当前配置"""
-        name = self.name_var.get().strip()
-        if not name:
-            messagebox.showwarning("提示", "请输入配置名称")
-            return
+    def add_site_from_list(self):
+        """添加新站点"""
+        from konata_api.stats import create_site, add_site, SITE_TYPE_PAID
 
-        profile = {
-            "name": name,
-            "url": self.url_var.get().strip(),
-            "key": self.key_var.get().strip(),
-        }
-
-        # 保留已有的 auth_type, endpoints, proxy, jwt_token 配置
-        profiles = self.config.get("profiles", [])
-        for p in profiles:
-            if p.get("name") == name:
-                # 向后兼容：如果存在旧的 auth_type，映射到新字段
-                if "balance_auth_type" in p:
-                    profile["balance_auth_type"] = p["balance_auth_type"]
-                elif "auth_type" in p:
-                    profile["balance_auth_type"] = p["auth_type"]
-                if "log_auth_type" in p:
-                    profile["log_auth_type"] = p["log_auth_type"]
-                if "endpoints" in p:
-                    profile["endpoints"] = p["endpoints"]
-                if "proxy" in p:
-                    profile["proxy"] = p["proxy"]
-                if "jwt_token" in p:
-                    profile["jwt_token"] = p["jwt_token"]
-                break
-
-        found = False
-        for i, p in enumerate(profiles):
-            if p.get("name") == name:
-                profiles[i] = profile
-                found = True
-                break
-
-        if not found:
-            profiles.append(profile)
-
-        self.config["profiles"] = profiles
-        save_config(self.config)
+        site = create_site(name="新站点", url="https://", site_type=SITE_TYPE_PAID)
+        add_site(self.stats_data, site)
+        save_stats(self.stats_data)
         self.refresh_profile_list()
-        self.status_var.set(f"✅ 配置 '{name}' 已保存")
 
-    def delete_profile(self):
-        """删除选中配置"""
+        # 选中新站点并同步
+        self.profile_tree.selection_set(site["id"])
+        self._current_site = site
+        self._sync_site_to_modules()
+
+        # 切换到数据统计标签页进行编辑
+        self.main_notebook.select(0)
+        self.status_var.set("✅ 已添加新站点，请在右侧编辑详情")
+
+    def delete_site_from_list(self):
+        """删除选中的站点"""
+        from konata_api.stats import delete_site
+
         selection = self.profile_tree.selection()
         if not selection:
-            messagebox.showwarning("提示", "请先选择要删除的配置")
+            messagebox.showwarning("提示", "请先选择要删除的站点")
             return
 
-        idx = self.profile_tree.index(selection[0])
-        profiles = self.config.get("profiles", [])
-        if idx < len(profiles):
-            name = profiles[idx].get("name", "")
-            if messagebox.askyesno("确认", f"确定删除配置 '{name}' 吗？"):
-                del profiles[idx]
-                self.config["profiles"] = profiles
-                save_config(self.config)
-                self.refresh_profile_list()
-                self.status_var.set(f"🗑️ 配置 '{name}' 已删除")
+        site_id = selection[0]
+        site = get_site_by_id(self.stats_data, site_id)
+        if not site:
+            return
+
+        if messagebox.askyesno("确认", f"确定删除站点「{site.get('name', '')}」吗？"):
+            delete_site(self.stats_data, site_id)
+            save_stats(self.stats_data)
+            self.refresh_profile_list()
+
+            # 同步刷新统计模块
+            if hasattr(self, 'stats_frame'):
+                self.stats_frame.stats_data = self.stats_data
+                self.stats_frame.current_site_id = None
+                self.stats_frame.clear_form()
+                self.stats_frame.update_summary()
+
+            self.status_var.set(f"🗑️ 已删除站点: {site.get('name', '')}")
+
+    def open_all_checkin_from_list(self):
+        """一键打开所有签到网址"""
+        import webbrowser
+
+        checkin_urls = []
+        for site in self.stats_data.get("sites", []):
+            checkin_url = site.get("checkin_url", "").strip()
+            if checkin_url:
+                checkin_urls.append((site.get("name", "未命名"), checkin_url))
+
+        if not checkin_urls:
+            messagebox.showinfo("提示", "没有配置签到网址的站点\n\n请在「数据统计」中为站点配置签到网址")
+            return
+
+        names = [name for name, _ in checkin_urls]
+        if messagebox.askyesno("确认", f"即将打开 {len(checkin_urls)} 个签到页面:\n\n" + "\n".join(names[:10]) + ("\n..." if len(names) > 10 else "")):
+            for name, url in checkin_urls:
+                webbrowser.open(url)
 
     def open_profile_advanced(self):
         """打开站点高级设置对话框"""
-        selection = self.profile_tree.selection()
-        if not selection:
-            messagebox.showwarning("提示", "请先选择要设置的站点")
+        if not hasattr(self, '_current_site') or not self._current_site:
+            messagebox.showwarning("提示", "请先选择一个站点")
             return
 
-        idx = self.profile_tree.index(selection[0])
-        profiles = self.config.get("profiles", [])
-        if idx < len(profiles):
-            profile = profiles[idx]
+        site = self._current_site
 
-            def on_save(updated_profile):
-                profiles[idx] = updated_profile
-                self.config["profiles"] = profiles
-                save_config(self.config)
-                self.status_var.set(f"✅ 站点 '{updated_profile.get('name', '')}' 高级设置已保存")
-                # 如果当前加载的是这个 profile，更新内存中的配置
-                if self.name_var.get() == updated_profile.get("name"):
-                    self._current_profile_balance_auth_type = updated_profile.get("balance_auth_type", "bearer")
-                    self._current_profile_log_auth_type = updated_profile.get("log_auth_type", "url_key")
-                    self._current_profile_endpoints = updated_profile.get("endpoints", {})
+        # 构造 profile 格式数据给 ProfileAdvancedDialog
+        profile = {
+            "name": site.get("name", ""),
+            "url": site.get("url", ""),
+            "key": site.get("api_key", ""),
+            "balance_auth_type": site.get("balance_auth_type", "bearer"),
+            "log_auth_type": site.get("log_auth_type", "url_key"),
+            "proxy": site.get("proxy", ""),
+            "endpoints": site.get("endpoints", {})
+        }
 
-            ProfileAdvancedDialog(self.root, profile.copy(), on_save)
+        def on_save(updated_profile):
+            # 更新 stats.json 中的站点数据
+            site["balance_auth_type"] = updated_profile.get("balance_auth_type", "bearer")
+            site["log_auth_type"] = updated_profile.get("log_auth_type", "url_key")
+            site["proxy"] = updated_profile.get("proxy", "")
+            site["endpoints"] = updated_profile.get("endpoints", {})
+
+            save_stats(self.stats_data)
+            self.status_var.set(f"✅ 站点 '{site.get('name', '')}' 高级设置已保存")
+
+            # 更新内存中的配置
+            self._current_profile_balance_auth_type = site.get("balance_auth_type", "bearer")
+            self._current_profile_log_auth_type = site.get("log_auth_type", "url_key")
+            self._current_profile_endpoints = site.get("endpoints", {})
+            self._current_profile_proxy = site.get("proxy", "")
+
+        ProfileAdvancedDialog(self.root, profile.copy(), on_save)
 
     def query_balance(self):
         """查询当前配置的余额"""
@@ -465,9 +538,9 @@ class ApiQueryApp:
 
     def query_all_balance(self):
         """查询所有配置的余额"""
-        profiles = self.config.get("profiles", [])
-        if not profiles:
-            messagebox.showwarning("提示", "没有保存的配置")
+        sites = self.stats_data.get("sites", [])
+        if not sites:
+            messagebox.showwarning("提示", "没有保存的站点配置")
             return
 
         self.result_text.delete("1.0", "end")
@@ -485,10 +558,10 @@ class ApiQueryApp:
             "sites": []
         }
 
-        for i, p in enumerate(profiles):
-            name = p.get("name", f"配置{i+1}")
-            url = p.get("url", "")
-            key = p.get("key", "")
+        for i, site in enumerate(sites):
+            name = site.get("name", f"站点{i+1}")
+            url = site.get("url", "")
+            key = site.get("api_key", "")
 
             if not url or not key:
                 self.result_text.insert("end", f"⚠️ 【{name}】配置不完整，跳过\n\n")
@@ -502,15 +575,13 @@ class ApiQueryApp:
                 })
                 continue
 
-            self.status_var.set(f"⏳ 正在查询: {name} ({i+1}/{len(profiles)})")
+            self.status_var.set(f"⏳ 正在查询: {name} ({i+1}/{len(sites)})")
             self.root.update()
 
-            # 获取 profile 级别的配置
-            profile_endpoints = p.get("endpoints", {})
-            sub_api = profile_endpoints.get("balance_subscription") or global_endpoints.get("balance_subscription", "/v1/dashboard/billing/subscription")
-            usage_api = profile_endpoints.get("balance_usage") or global_endpoints.get("balance_usage", "/v1/dashboard/billing/usage")
-            # 向后兼容：如果没有 balance_auth_type，使用旧的 auth_type
-            auth_type = p.get("balance_auth_type", p.get("auth_type", "bearer"))
+            # 使用全局接口配置
+            sub_api = global_endpoints.get("balance_subscription", "/v1/dashboard/billing/subscription")
+            usage_api = global_endpoints.get("balance_usage", "/v1/dashboard/billing/usage")
+            auth_type = "bearer"
 
             try:
                 result = query_balance(key, url, subscription_api=sub_api, usage_api=usage_api, auth_type=auth_type)
@@ -536,7 +607,7 @@ class ApiQueryApp:
                     "error": str(e)
                 })
 
-        self.status_var.set(f"✅ 批量查询完成，共 {len(profiles)} 个配置")
+        self.status_var.set(f"✅ 批量查询完成，共 {len(sites)} 个站点")
 
         # 弹出汇总对话框
         threshold = self.config.get("low_balance_threshold", 10)
@@ -825,13 +896,13 @@ class ApiQueryApp:
 
     def open_stats(self):
         """切换到统计标签页"""
-        self.main_notebook.select(2)
+        self.main_notebook.select(0)
         # 更新 profiles 数据
         self.stats_frame.set_profiles(self.config.get("profiles", []))
 
     def open_test(self):
         """切换到测试标签页"""
-        self.main_notebook.select(1)
+        self.main_notebook.select(2)
 
     def show_window(self):
         """显示主窗口"""

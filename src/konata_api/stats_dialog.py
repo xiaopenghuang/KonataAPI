@@ -22,16 +22,18 @@ from konata_api.stats import (
 class StatsFrame(ttk.Frame):
     """统计模块面板（嵌入式 Frame）"""
 
-    def __init__(self, parent, profiles=None, show_site_list=True, **kwargs):
+    def __init__(self, parent, profiles=None, show_site_list=True, on_save_callback=None, **kwargs):
         """
         Args:
             parent: 父窗口
             profiles: 主配置中的 profiles 列表（用于导入）
             show_site_list: 是否显示站点列表（嵌入主窗口时可隐藏）
+            on_save_callback: 保存站点后的回调函数
         """
         super().__init__(parent, **kwargs)
         self.profiles = profiles or []
         self.show_site_list = show_site_list
+        self.on_save_callback = on_save_callback
         self.stats_data = load_stats()
         self.current_site_id = None
         self.charts_loaded = False  # 图表是否已加载
@@ -50,6 +52,7 @@ class StatsFrame(ttk.Frame):
         # 查找或创建对应的站点
         url = site_info.get("url", "").rstrip("/")
         name = site_info.get("name", "")
+        api_key = site_info.get("api_key", "")
 
         # 在 stats_data 中查找
         for site in self.stats_data.get("sites", []):
@@ -58,11 +61,19 @@ class StatsFrame(ttk.Frame):
                 self.load_site_to_form(site)
                 return
 
-        # 如果不存在，显示基本信息
-        self.current_site_id = None
-        self.name_var.set(name)
-        self.url_var.set(url)
-        self.api_key_var.set(site_info.get("api_key", ""))
+        # 如果不存在，自动创建新站点
+        new_site = create_site(name=name, url=url, site_type=SITE_TYPE_PAID)
+        new_site["api_key"] = api_key
+        add_site(self.stats_data, new_site)
+        save_stats(self.stats_data)
+
+        self.current_site_id = new_site["id"]
+        self.load_site_to_form(new_site)
+
+        # 刷新站点列表（如果有的话）
+        if self.show_site_list:
+            self.refresh_site_list()
+        self.update_summary()
 
     def create_widgets(self):
         """创建主界面"""
@@ -239,8 +250,7 @@ class StatsFrame(ttk.Frame):
         # 保存按钮
         btn_frame = ttk.Frame(form_frame)
         btn_frame.pack(fill=X, pady=(15, 0))
-        ttk.Button(btn_frame, text="🎁 一键签到", command=self.open_all_checkin, bootstyle="warning", width=12).pack(side=LEFT)
-        ttk.Button(btn_frame, text="保存修改", command=self.save_site, bootstyle="success", width=12).pack(side=RIGHT)
+        ttk.Button(btn_frame, text="💾 保存修改", command=self.save_site, bootstyle="success", width=12).pack(side=RIGHT)
 
     def create_recharge_form(self, parent):
         """创建充值记录表单"""
@@ -445,6 +455,9 @@ class StatsFrame(ttk.Frame):
             save_stats(self.stats_data)
             self.refresh_site_list()
             self.update_summary()
+            # 通知主窗口刷新列表
+            if self.on_save_callback:
+                self.on_save_callback()
             messagebox.showinfo("成功", "站点信息已保存")
         else:
             messagebox.showerror("错误", "保存失败")
@@ -539,27 +552,6 @@ class StatsFrame(ttk.Frame):
             webbrowser.open(checkin_url)
         else:
             messagebox.showwarning("提示", "该站点没有配置签到网址")
-
-    def open_all_checkin(self):
-        """一键打开所有已配置签到网址的站点"""
-        self.stats_data = load_stats()
-        sites = self.stats_data.get("sites", [])
-
-        checkin_urls = []
-        for site in sites:
-            checkin_url = site.get("checkin_url", "").strip()
-            if checkin_url:
-                checkin_urls.append((site.get("name", "未命名"), checkin_url))
-
-        if not checkin_urls:
-            messagebox.showinfo("提示", "没有配置签到网址的站点")
-            return
-
-        # 确认打开
-        names = [name for name, _ in checkin_urls]
-        if messagebox.askyesno("确认", f"即将打开 {len(checkin_urls)} 个签到页面:\n\n" + "\n".join(names[:10]) + ("\n..." if len(names) > 10 else "")):
-            for name, url in checkin_urls:
-                webbrowser.open(url)
 
     def add_recharge(self):
         """添加充值记录"""
