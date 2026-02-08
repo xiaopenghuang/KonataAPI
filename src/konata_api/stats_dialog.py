@@ -6,6 +6,7 @@ import json
 from datetime import datetime
 import webbrowser
 import ttkbootstrap as ttk
+import tkinter as tk
 from ttkbootstrap.constants import *
 from ttkbootstrap.scrolled import ScrolledFrame, ScrolledText
 from tkinter import messagebox, Text
@@ -18,9 +19,25 @@ from konata_api.stats import (
     add_checkin_log,
     import_from_profiles, get_stats_summary,
     create_balance_bar_chart, create_type_stats_chart,
+    create_recharge_trend_chart, create_checkin_activity_chart,
     SITE_TYPE_PAID, SITE_TYPE_FREE, SITE_TYPE_SUBSCRIPTION, SITE_TYPE_LABELS
 )
 from konata_api.api import query_balance_by_cookie, do_checkin
+
+
+def fit_toplevel(window, preferred_width, preferred_height, min_width=520, min_height=360):
+    """根据屏幕尺寸自适应弹窗大小并居中"""
+    screen_w = window.winfo_screenwidth()
+    screen_h = window.winfo_screenheight()
+
+    width = min(preferred_width, max(screen_w - 60, min_width))
+    height = min(preferred_height, max(screen_h - 120, min_height))
+    width = max(width, min_width)
+    height = max(height, min_height)
+
+    x = max((screen_w - width) // 2, 0)
+    y = max((screen_h - height) // 2, 0)
+    window.geometry(f"{width}x{height}+{x}+{y}")
 
 
 class StatsFrame(ttk.Frame):
@@ -365,7 +382,6 @@ class StatsFrame(ttk.Frame):
 
     def create_charts_area(self, parent):
         """创建图表区域"""
-        # 顶部：统计摘要 + 绘制按钮
         top_bar = ttk.Frame(parent)
         top_bar.pack(fill=X, pady=(0, 10))
 
@@ -374,23 +390,77 @@ class StatsFrame(ttk.Frame):
 
         ttk.Button(top_bar, text="📈 绘制图表", command=self.draw_charts, bootstyle="success", width=12).pack(side=RIGHT)
 
-        # 图表区域 - 竖向排列（上下放置）
-        charts_frame = ttk.Frame(parent)
-        charts_frame.pack(fill=BOTH, expand=YES)
+        charts_scroll_frame = ttk.Frame(parent)
+        charts_scroll_frame.pack(fill=BOTH, expand=YES)
 
-        # 上图：余额柱状图
-        top_chart = ttk.Labelframe(charts_frame, text=" 余额分布 ", padding=5)
-        top_chart.pack(fill=X, pady=(0, 10))
+        canvas_container = ttk.Frame(charts_scroll_frame)
+        canvas_container.pack(side=TOP, fill=BOTH, expand=YES)
 
-        self.balance_chart_label = ttk.Label(top_chart, text="点击「绘制图表」生成统计图", bootstyle="secondary", font=("Microsoft YaHei", 10))
+        self.charts_canvas = tk.Canvas(canvas_container, highlightthickness=0, bd=0)
+        self.charts_canvas.pack(side=LEFT, fill=BOTH, expand=YES)
+
+        self.charts_y_scrollbar = ttk.Scrollbar(canvas_container, orient=VERTICAL, command=self.charts_canvas.yview)
+        self.charts_y_scrollbar.pack(side=RIGHT, fill=Y)
+
+        self.charts_x_scrollbar = ttk.Scrollbar(charts_scroll_frame, orient=HORIZONTAL, command=self.charts_canvas.xview)
+        self.charts_x_scrollbar.pack(side=BOTTOM, fill=X, pady=(6, 0))
+
+        self.charts_canvas.configure(
+            xscrollcommand=self.charts_x_scrollbar.set,
+            yscrollcommand=self.charts_y_scrollbar.set,
+        )
+
+        self._charts_min_width = 1120
+        self.charts_content = ttk.Frame(self.charts_canvas)
+        self.charts_content.columnconfigure(0, weight=1, minsize=540)
+        self.charts_content.columnconfigure(1, weight=1, minsize=540)
+        self.charts_content.rowconfigure(0, weight=1)
+        self.charts_content.rowconfigure(1, weight=1)
+
+        self.charts_window_id = self.charts_canvas.create_window(
+            (0, 0),
+            window=self.charts_content,
+            anchor="nw",
+            width=self._charts_min_width,
+        )
+
+        self.charts_content.bind("<Configure>", self.on_charts_content_configure)
+        self.charts_canvas.bind("<Configure>", self.on_charts_canvas_configure)
+
+        placeholder = "点击「绘制图表」生成统计图"
+
+        balance_chart = ttk.Labelframe(self.charts_content, text=" 余额排名 ", padding=6)
+        balance_chart.grid(row=0, column=0, sticky="nsew", padx=(0, 6), pady=(0, 6))
+        self.balance_chart_label = ttk.Label(balance_chart, text=placeholder, bootstyle="secondary", anchor=CENTER, justify=CENTER)
         self.balance_chart_label.pack(fill=BOTH, expand=YES)
 
-        # 下图：分类统计图
-        bottom_chart = ttk.Labelframe(charts_frame, text=" 分类统计 ", padding=5)
-        bottom_chart.pack(fill=X)
-
-        self.type_chart_label = ttk.Label(bottom_chart, text="点击「绘制图表」生成统计图", bootstyle="secondary", font=("Microsoft YaHei", 10))
+        type_chart = ttk.Labelframe(self.charts_content, text=" 类型占比与对比 ", padding=6)
+        type_chart.grid(row=0, column=1, sticky="nsew", padx=(6, 0), pady=(0, 6))
+        self.type_chart_label = ttk.Label(type_chart, text=placeholder, bootstyle="secondary", anchor=CENTER, justify=CENTER)
         self.type_chart_label.pack(fill=BOTH, expand=YES)
+
+        recharge_chart = ttk.Labelframe(self.charts_content, text=" 充值趋势（近12个月） ", padding=6)
+        recharge_chart.grid(row=1, column=0, sticky="nsew", padx=(0, 6), pady=(6, 0))
+        self.recharge_chart_label = ttk.Label(recharge_chart, text=placeholder, bootstyle="secondary", anchor=CENTER, justify=CENTER)
+        self.recharge_chart_label.pack(fill=BOTH, expand=YES)
+
+        checkin_chart = ttk.Labelframe(self.charts_content, text=" 签到活跃度（近30天） ", padding=6)
+        checkin_chart.grid(row=1, column=1, sticky="nsew", padx=(6, 0), pady=(6, 0))
+        self.checkin_chart_label = ttk.Label(checkin_chart, text=placeholder, bootstyle="secondary", anchor=CENTER, justify=CENTER)
+        self.checkin_chart_label.pack(fill=BOTH, expand=YES)
+
+    def on_charts_content_configure(self, event=None):
+        """更新图表区域滚动范围"""
+        if not hasattr(self, "charts_canvas"):
+            return
+        self.charts_canvas.configure(scrollregion=self.charts_canvas.bbox("all"))
+
+    def on_charts_canvas_configure(self, event):
+        """窗口宽度变化时，保持图表内容最小宽度以支持横向滚动"""
+        if not hasattr(self, "charts_window_id"):
+            return
+        target_width = max(event.width, self._charts_min_width)
+        self.charts_canvas.itemconfigure(self.charts_window_id, width=target_width)
 
     # ============ 事件处理 ============
 
@@ -775,10 +845,14 @@ class StatsFrame(ttk.Frame):
                 self.refresh_site_list()
                 self.update_summary()
 
-            messagebox.showinfo("签到成功", f"{site.get('name', '未命名')} 签到成功\n获得: ${quota_usd:.2f}")
+            if result.get("already_checked_in"):
+                messagebox.showinfo("今日已签到", f"{site.get('name', '未命名')}\n{result.get('message', '今日已签到')}")
+            else:
+                messagebox.showinfo("签到成功", f"{site.get('name', '未命名')} 签到成功\n获得: ${quota_usd:.2f}")
         else:
             add_checkin_log(site.get("name", "未命名"), site.get("id", ""), False, 0, result.get("message", ""))
             messagebox.showerror("签到失败", result.get("message", "未知错误"))
+
 
     def copy_cookie_script(self):
         """打开网站并提示用户如何获取 Cookie"""
@@ -802,7 +876,7 @@ class StatsFrame(ttk.Frame):
         # 创建带「粘贴解析」按钮的对话框
         dialog = ttk.Toplevel(self.master)
         dialog.title("获取 Cookie")
-        dialog.geometry("650x520")
+        fit_toplevel(dialog, preferred_width=760, preferred_height=560, min_width=600, min_height=480)
         dialog.minsize(600, 480)
         dialog.transient(self.master)
         dialog.grab_set()
@@ -824,7 +898,7 @@ class StatsFrame(ttk.Frame):
                 text = self.master.clipboard_get()
                 self.cookie_input_text.text.delete("1.0", "end")
                 self.cookie_input_text.text.insert("1.0", text)
-            except:
+            except Exception:
                 messagebox.showwarning("提示", "剪贴板为空或无法读取")
 
         def parse_input():
@@ -989,30 +1063,31 @@ class StatsFrame(ttk.Frame):
 
     def draw_charts(self):
         """绘制图表（点击按钮时才执行）"""
-        # 延迟导入 matplotlib，避免启动时卡顿
         from matplotlib.backends.backend_agg import FigureCanvasAgg
+        import matplotlib.pyplot as plt
 
         sites = self.stats_data.get("sites", [])
 
-        # 生成余额柱状图（宽度大，高度小，适合竖向排列）
-        try:
-            fig1 = create_balance_bar_chart(sites, figsize=(8, 2.5), dpi=100)
-            img1 = self.fig_to_image(fig1, FigureCanvasAgg)
-            self.balance_chart_label.config(image=img1, text="")
-            self.balance_chart_label.image = img1
-            fig1.clear()
-        except Exception as e:
-            self.balance_chart_label.config(text=f"图表生成失败: {e}")
+        chart_jobs = [
+            (self.balance_chart_label, lambda: create_balance_bar_chart(sites, figsize=(4.8, 2.6), dpi=110)),
+            (self.type_chart_label, lambda: create_type_stats_chart(sites, figsize=(4.8, 2.6), dpi=110)),
+            (self.recharge_chart_label, lambda: create_recharge_trend_chart(sites, months=12, figsize=(4.8, 2.6), dpi=110)),
+            (self.checkin_chart_label, lambda: create_checkin_activity_chart(days=30, figsize=(4.8, 2.6), dpi=110)),
+        ]
 
-        # 生成分类统计图
-        try:
-            fig2 = create_type_stats_chart(sites, figsize=(8, 2.5), dpi=100)
-            img2 = self.fig_to_image(fig2, FigureCanvasAgg)
-            self.type_chart_label.config(image=img2, text="")
-            self.type_chart_label.image = img2
-            fig2.clear()
-        except Exception as e:
-            self.type_chart_label.config(text=f"图表生成失败: {e}")
+        for chart_label, factory in chart_jobs:
+            fig = None
+            try:
+                fig = factory()
+                chart_img = self.fig_to_image(fig, FigureCanvasAgg)
+                chart_label.config(image=chart_img, text="")
+                chart_label.image = chart_img
+            except Exception as e:
+                chart_label.config(image="", text=f"图表生成失败: {e}")
+                chart_label.image = None
+            finally:
+                if fig is not None:
+                    plt.close(fig)
 
         self.charts_loaded = True
 
@@ -1043,13 +1118,13 @@ class StatsDialog:
 
         self.dialog = ttk.Toplevel(parent)
         self.dialog.title("📊 站点统计")
-        self.dialog.geometry("1100x750")
+        fit_toplevel(self.dialog, preferred_width=1180, preferred_height=820, min_width=900, min_height=640)
         self.dialog.resizable(True, True)
 
         # 设置窗口图标
         try:
             self.dialog.iconbitmap(resource_path("assets/icon.ico"))
-        except:
+        except Exception:
             pass
 
         self.dialog.transient(parent)

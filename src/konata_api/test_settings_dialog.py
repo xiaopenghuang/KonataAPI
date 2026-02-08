@@ -26,14 +26,29 @@ from konata_api.api_presets import (
 from konata_api.utils import resource_path
 
 
+def fit_toplevel(window, preferred_width, preferred_height, min_width=620, min_height=420):
+    """根据屏幕尺寸自适应弹窗大小并居中"""
+    screen_w = window.winfo_screenwidth()
+    screen_h = window.winfo_screenheight()
+
+    width = min(preferred_width, max(screen_w - 60, min_width))
+    height = min(preferred_height, max(screen_h - 120, min_height))
+    width = max(width, min_width)
+    height = max(height, min_height)
+
+    x = max((screen_w - width) // 2, 0)
+    y = max((screen_h - height) // 2, 0)
+    window.geometry(f"{width}x{height}+{x}+{y}")
+
+
 class TestSettingsDialog(ttkb.Toplevel):
     """站点测试设置对话框"""
 
     def __init__(self, parent, current_config: dict = None, on_save: Callable = None, **kwargs):
         super().__init__(parent)
         self.title("接口设置")
-        self.geometry("950x700")
-        self.minsize(900, 650)
+        fit_toplevel(self, preferred_width=1060, preferred_height=780, min_width=900, min_height=640)
+        self.minsize(900, 640)
 
         try:
             self.iconbitmap(resource_path("assets/icon.ico"))
@@ -310,7 +325,6 @@ class TestSettingsDialog(ttkb.Toplevel):
 
         # 如果支持思考模式，合并显示
         if config.get("supports_thinking") and config.get("thinking_config"):
-            body_with_thinking = {**body, **config.get("thinking_config", {})}
             body_text = json.dumps(body, indent=2, ensure_ascii=False)
             body_text += "\n\n// 思考模式配置 (启用时追加):\n"
             body_text += json.dumps(config.get("thinking_config", {}), indent=2, ensure_ascii=False)
@@ -375,11 +389,11 @@ class TestSettingsDialog(ttkb.Toplevel):
         # 弹出预览对话框
         preview_dialog = ttkb.Toplevel(self)
         preview_dialog.title("请求预览")
-        preview_dialog.geometry("700x600")
+        fit_toplevel(preview_dialog, preferred_width=860, preferred_height=680, min_width=700, min_height=520)
 
         try:
             preview_dialog.iconbitmap(resource_path("assets/icon.ico"))
-        except:
+        except Exception:
             pass
 
         frame = ttk.Frame(preview_dialog, padding=10)

@@ -13,6 +13,21 @@ from konata_api.utils import (
 )
 
 
+def fit_toplevel(window, preferred_width, preferred_height, min_width=520, min_height=360):
+    """根据屏幕尺寸自适应弹窗大小并居中"""
+    screen_w = window.winfo_screenwidth()
+    screen_h = window.winfo_screenheight()
+
+    width = min(preferred_width, max(screen_w - 60, min_width))
+    height = min(preferred_height, max(screen_h - 120, min_height))
+    width = max(width, min_width)
+    height = max(height, min_height)
+
+    x = max((screen_w - width) // 2, 0)
+    y = max((screen_h - height) // 2, 0)
+    window.geometry(f"{width}x{height}+{x}+{y}")
+
+
 class SettingsDialog:
     """设置对话框（分页布局）"""
     def __init__(self, parent, config, app=None):
@@ -20,13 +35,13 @@ class SettingsDialog:
         self.app = app  # 主应用引用，用于更新自动查询
         self.dialog = ttk.Toplevel(parent)
         self.dialog.title("⚙️ 设置")
-        self.dialog.geometry("550x600")
+        fit_toplevel(self.dialog, preferred_width=560, preferred_height=640, min_width=520, min_height=520)
         self.dialog.resizable(False, False)
 
         # 设置窗口图标
         try:
             self.dialog.iconbitmap(resource_path("assets/icon.ico"))
-        except:
+        except Exception:
             pass
 
         # 居中显示
@@ -275,13 +290,13 @@ class RawResponseDialog:
     def __init__(self, parent, title, data):
         self.dialog = ttk.Toplevel(parent)
         self.dialog.title(title)
-        self.dialog.geometry("700x500")
+        fit_toplevel(self.dialog, preferred_width=780, preferred_height=580, min_width=620, min_height=420)
         self.dialog.resizable(True, True)
 
         # 设置窗口图标
         try:
             self.dialog.iconbitmap(resource_path("assets/icon.ico"))
-        except:
+        except Exception:
             pass
 
         # 居中显示
@@ -323,7 +338,7 @@ class RawResponseDialog:
         # 格式化 JSON 并显示
         try:
             formatted_json = json.dumps(data, ensure_ascii=False, indent=2)
-        except:
+        except Exception:
             formatted_json = str(data)
 
         self.text.insert("1.0", formatted_json)
@@ -350,13 +365,13 @@ class ProfileAdvancedDialog:
         self.on_save_callback = on_save_callback
         self.dialog = ttk.Toplevel(parent)
         self.dialog.title(f"⚙️ 高级设置 - {profile.get('name', '未命名')}")
-        self.dialog.geometry("550x500")
+        fit_toplevel(self.dialog, preferred_width=620, preferred_height=560, min_width=520, min_height=460)
         self.dialog.resizable(False, True)
 
         # 设置窗口图标
         try:
             self.dialog.iconbitmap(resource_path("assets/icon.ico"))
-        except:
+        except Exception:
             pass
 
         # 居中显示
@@ -595,13 +610,13 @@ class BalanceSummaryDialog:
         self.threshold = low_balance_threshold
         self.dialog = ttk.Toplevel(parent)
         self.dialog.title("📊 批量查询汇总统计")
-        self.dialog.geometry("600x550")
+        fit_toplevel(self.dialog, preferred_width=720, preferred_height=620, min_width=600, min_height=500)
         self.dialog.resizable(True, True)
 
         # 设置窗口图标
         try:
             self.dialog.iconbitmap(resource_path("assets/icon.ico"))
-        except:
+        except Exception:
             pass
 
         # 居中显示

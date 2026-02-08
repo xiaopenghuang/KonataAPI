@@ -5,7 +5,7 @@ import json
 import os
 import uuid
 import warnings
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 # 过滤 matplotlib 字体警告
@@ -15,10 +15,26 @@ import matplotlib
 matplotlib.use('Agg')  # 非交互式后端，避免 tkinter 冲突
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
+from matplotlib.font_manager import FontProperties
+from matplotlib.ticker import FuncFormatter
 
 # 设置中文字体（在导入后立即设置）
-plt.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei', 'STSong', 'Arial Unicode MS', 'DejaVu Sans']
-plt.rcParams['axes.unicode_minus'] = False
+FONT_FAMILY_STACK = [
+    "Times New Roman",  # English
+    "SimSun",           # Chinese (宋体)
+    "DejaVu Serif",     # fallback
+]
+
+FONT_DEFAULT = FontProperties(family=FONT_FAMILY_STACK, size=10)
+FONT_SMALL = FontProperties(family=FONT_FAMILY_STACK, size=9)
+FONT_TITLE = FontProperties(family=FONT_FAMILY_STACK, size=12, weight="bold")
+FONT_SUBTITLE = FontProperties(family=FONT_FAMILY_STACK, size=11, weight="bold")
+
+plt.rcParams["font.family"] = FONT_FAMILY_STACK
+plt.rcParams["axes.unicode_minus"] = False
+plt.rcParams["figure.facecolor"] = "#f8fafc"
+plt.rcParams["axes.facecolor"] = "#f8fafc"
+plt.rcParams["savefig.facecolor"] = "#f8fafc"
 
 from konata_api.utils import get_exe_dir
 
@@ -264,134 +280,382 @@ def update_site_balance(data: dict, url: str, balance: float, unit: str = "USD")
 
 # ============ 图表生成 ============
 
-def create_balance_bar_chart(sites: list, figsize=(6, 4), dpi=100) -> Figure:
-    """
-    生成余额柱状图
-
-    Args:
-        sites: 站点列表
-        figsize: 图表尺寸
-        dpi: 分辨率
-
-    Returns:
-        matplotlib Figure 对象
-    """
-    # 过滤有余额的站点，按余额排序
-    valid_sites = [s for s in sites if s.get("balance", 0) > 0 and s.get("balance_unit") in ("USD", "CNY", "")]
-    valid_sites = sorted(valid_sites, key=lambda x: x.get("balance", 0), reverse=True)[:10]  # 最多显示10个
-
-    if not valid_sites:
-        # 无数据时返回空图
-        fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
-        ax.text(0.5, 0.5, "暂无余额数据", ha='center', va='center', fontsize=12, color='gray')
-        ax.set_xlim(0, 1)
-        ax.set_ylim(0, 1)
-        ax.axis('off')
-        plt.tight_layout()
-        return fig
-
-    names = [s["name"][:8] for s in valid_sites]  # 名称截断
-    balances = [s["balance"] for s in valid_sites]
-
-    # 根据站点类型设置颜色
-    colors = []
-    for s in valid_sites:
-        site_type = s.get("type", SITE_TYPE_PAID)
-        if site_type == SITE_TYPE_FREE:
-            colors.append("#4CAF50")  # 绿色 - 公益站
-        elif site_type == SITE_TYPE_SUBSCRIPTION:
-            colors.append("#FF9800")  # 橙色 - 订阅转API
-        else:
-            colors.append("#2196F3")  # 蓝色 - 付费站
-
+def _create_placeholder_chart(message: str, figsize=(6, 4), dpi=100) -> Figure:
+    """Create a simple placeholder chart when no data is available."""
     fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
-
-    bars = ax.barh(names, balances, color=colors, edgecolor='white', height=0.6)
-
-    # 在柱子上显示数值
-    for bar, balance in zip(bars, balances):
-        width = bar.get_width()
-        ax.text(width + max(balances) * 0.02, bar.get_y() + bar.get_height()/2,
-                f'${balance:.2f}', va='center', fontsize=9)
-
-    ax.set_xlabel('余额 (USD)', fontsize=10)
-    ax.set_title('各站点余额', fontsize=12, fontweight='bold')
-    ax.invert_yaxis()  # 最大的在上面
-    ax.set_xlim(0, max(balances) * 1.2)
-
-    plt.tight_layout()
+    ax.text(0.5, 0.5, message, ha="center", va="center", color="#64748b", fontproperties=FONT_SUBTITLE)
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.axis("off")
+    fig.tight_layout()
     return fig
 
 
-def create_type_stats_chart(sites: list, figsize=(5, 4), dpi=100) -> Figure:
-    """
-    生成分类统计图（按站点类型分组）
+def _set_axis_style(ax, grid_axis: str = "x"):
+    """Apply a unified modern style to axes."""
+    ax.grid(axis=grid_axis, linestyle="--", linewidth=0.8, color="#cbd5e1", alpha=0.6)
+    ax.tick_params(colors="#334155", labelsize=9)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_color("#cbd5e1")
+    ax.spines["bottom"].set_color("#cbd5e1")
 
-    Args:
-        sites: 站点列表
-        figsize: 图表尺寸
-        dpi: 分辨率
 
-    Returns:
-        matplotlib Figure 对象
-    """
-    # 按类型统计
+
+def _apply_tick_font(ax):
+    for tick in ax.get_xticklabels():
+        tick.set_fontproperties(FONT_SMALL)
+    for tick in ax.get_yticklabels():
+        tick.set_fontproperties(FONT_SMALL)
+
+
+
+def _shorten_name(name: str, max_len: int = 14) -> str:
+    if len(name) <= max_len:
+        return name
+    return name[: max_len - 3] + "..."
+
+
+
+def _parse_datetime(value: str):
+    if not value:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+
+    formats = (
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d",
+        "%Y/%m/%d",
+        "%Y/%m/%d %H:%M:%S",
+    )
+    for fmt in formats:
+        try:
+            return datetime.strptime(raw, fmt)
+        except ValueError:
+            continue
+
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
+
+def _iter_recent_month_keys(months: int = 12):
+    cursor = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    keys = []
+    for _ in range(max(months, 1)):
+        keys.append(cursor.strftime("%Y-%m"))
+        cursor = (cursor - timedelta(days=1)).replace(day=1)
+    return list(reversed(keys))
+
+
+
+def create_balance_bar_chart(sites: list, figsize=(6, 4), dpi=100) -> Figure:
+    """Generate a horizontal ranking chart for site balances."""
+    valid_sites = [
+        s for s in sites
+        if s.get("balance", 0) > 0 and s.get("balance_unit") in ("USD", "CNY", "")
+    ]
+    valid_sites = sorted(valid_sites, key=lambda x: x.get("balance", 0), reverse=True)[:10]
+
+    if not valid_sites:
+        return _create_placeholder_chart("暂无余额数据", figsize=figsize, dpi=dpi)
+
+    names = [_shorten_name(s.get("name", "未命名")) for s in valid_sites]
+    balances = [float(s.get("balance", 0) or 0) for s in valid_sites]
+
+    color_map = {
+        SITE_TYPE_PAID: "#3b82f6",
+        SITE_TYPE_FREE: "#10b981",
+        SITE_TYPE_SUBSCRIPTION: "#f59e0b",
+    }
+    colors = [color_map.get(s.get("type", SITE_TYPE_PAID), "#94a3b8") for s in valid_sites]
+
+    fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
+
+    y_labels = list(reversed(names))
+    y_values = list(reversed(balances))
+    y_colors = list(reversed(colors))
+
+    bars = ax.barh(y_labels, y_values, color=y_colors, edgecolor="white", linewidth=1.0, height=0.58)
+
+    max_val = max(y_values) if y_values else 1.0
+    for bar, value in zip(bars, y_values):
+        ax.text(
+            bar.get_width() + max_val * 0.02,
+            bar.get_y() + bar.get_height() / 2,
+            f"${value:,.2f}",
+            va="center",
+            ha="left",
+            color="#1f2937",
+            fontproperties=FONT_SMALL,
+        )
+
+    ax.set_title("余额排名 Top 10", fontproperties=FONT_TITLE, color="#0f172a", pad=10)
+    ax.set_xlabel("Balance (USD)", fontproperties=FONT_DEFAULT, color="#334155")
+    ax.xaxis.set_major_formatter(FuncFormatter(lambda x, _: f"${x:,.0f}"))
+    ax.set_xlim(0, max_val * 1.24)
+
+    _set_axis_style(ax, grid_axis="x")
+    _apply_tick_font(ax)
+
+    fig.tight_layout()
+    return fig
+
+
+
+def create_type_stats_chart(sites: list, figsize=(6, 4), dpi=100) -> Figure:
+    """Generate type proportion and type balance comparison charts."""
     type_stats = {}
     for site in sites:
         site_type = site.get("type", SITE_TYPE_PAID)
         if site_type not in type_stats:
-            type_stats[site_type] = {"count": 0, "balance": 0}
+            type_stats[site_type] = {"count": 0, "balance": 0.0}
         type_stats[site_type]["count"] += 1
-        # 只统计 USD/CNY 余额
         if site.get("balance_unit") in ("USD", "CNY", ""):
-            type_stats[site_type]["balance"] += site.get("balance", 0)
+            type_stats[site_type]["balance"] += float(site.get("balance", 0) or 0)
 
     if not type_stats:
-        fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
-        ax.text(0.5, 0.5, "暂无站点数据", ha='center', va='center', fontsize=12, color='gray')
-        ax.axis('off')
-        plt.tight_layout()
-        return fig
+        return _create_placeholder_chart("暂无站点分类数据", figsize=figsize, dpi=dpi)
+
+    color_map = {
+        SITE_TYPE_PAID: "#3b82f6",
+        SITE_TYPE_FREE: "#10b981",
+        SITE_TYPE_SUBSCRIPTION: "#f59e0b",
+    }
+
+    type_keys = list(type_stats.keys())
+    labels = [SITE_TYPE_LABELS.get(t, t) for t in type_keys]
+    counts = [type_stats[t]["count"] for t in type_keys]
+    balances = [type_stats[t]["balance"] for t in type_keys]
+    colors = [color_map.get(t, "#94a3b8") for t in type_keys]
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize, dpi=dpi)
 
-    # 颜色映射
-    color_map = {
-        SITE_TYPE_PAID: "#2196F3",
-        SITE_TYPE_FREE: "#4CAF50",
-        SITE_TYPE_SUBSCRIPTION: "#FF9800",
-    }
-
-    labels = [SITE_TYPE_LABELS.get(t, t) for t in type_stats.keys()]
-    counts = [type_stats[t]["count"] for t in type_stats.keys()]
-    balances = [type_stats[t]["balance"] for t in type_stats.keys()]
-    colors = [color_map.get(t, "#9E9E9E") for t in type_stats.keys()]
-
-    # 左图：站点数量饼图
     if sum(counts) > 0:
         wedges, texts, autotexts = ax1.pie(
-            counts, labels=labels, colors=colors,
-            autopct=lambda p: f'{int(p*sum(counts)/100)}个' if p > 0 else '',
-            startangle=90, textprops={'fontsize': 9}
+            counts,
+            labels=labels,
+            colors=colors,
+            startangle=90,
+            autopct=lambda p: f"{p:.0f}%" if p >= 5 else "",
+            pctdistance=0.72,
+            labeldistance=1.07,
+            wedgeprops={"width": 0.40, "edgecolor": "white", "linewidth": 1.2},
         )
-        ax1.set_title('站点数量', fontsize=11, fontweight='bold')
-    else:
-        ax1.text(0.5, 0.5, "无数据", ha='center', va='center')
-        ax1.axis('off')
+        for txt in texts:
+            txt.set_fontproperties(FONT_SMALL)
+            txt.set_color("#334155")
+        for txt in autotexts:
+            txt.set_fontproperties(FONT_SMALL)
+            txt.set_color("#0f172a")
 
-    # 右图：余额分布饼图
-    if sum(balances) > 0:
-        wedges, texts, autotexts = ax2.pie(
-            balances, labels=labels, colors=colors,
-            autopct=lambda p: f'${p*sum(balances)/100:.0f}' if p > 5 else '',
-            startangle=90, textprops={'fontsize': 9}
+        ax1.text(
+            0,
+            0,
+            f"总计\n{sum(counts)}",
+            ha="center",
+            va="center",
+            color="#0f172a",
+            fontproperties=FONT_SUBTITLE,
         )
-        ax2.set_title('余额分布', fontsize=11, fontweight='bold')
+        ax1.set_title("站点类型占比", fontproperties=FONT_SUBTITLE, color="#0f172a", pad=6)
     else:
-        ax2.text(0.5, 0.5, "无余额数据", ha='center', va='center', fontsize=10, color='gray')
-        ax2.axis('off')
+        ax1.text(0.5, 0.5, "无数据", ha="center", va="center", fontproperties=FONT_DEFAULT)
+        ax1.axis("off")
 
-    plt.tight_layout()
+    bars = ax2.bar(labels, balances, color=colors, width=0.58, edgecolor="white", linewidth=1.0)
+    max_balance = max(balances) if balances else 0
+    for bar, value in zip(bars, balances):
+        ax2.text(
+            bar.get_x() + bar.get_width() / 2,
+            value + (max_balance * 0.03 if max_balance > 0 else 0.1),
+            f"${value:,.0f}",
+            ha="center",
+            va="bottom",
+            color="#1f2937",
+            fontproperties=FONT_SMALL,
+        )
+
+    ax2.set_title("各类型余额对比", fontproperties=FONT_SUBTITLE, color="#0f172a", pad=6)
+    ax2.set_ylabel("Balance (USD)", fontproperties=FONT_DEFAULT, color="#334155")
+    ax2.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"${y:,.0f}"))
+    ax2.set_ylim(0, max_balance * 1.28 if max_balance > 0 else 1)
+
+    _set_axis_style(ax2, grid_axis="y")
+    _apply_tick_font(ax2)
+
+    fig.tight_layout()
+    return fig
+
+
+
+def create_recharge_trend_chart(sites: list, months: int = 12, figsize=(6, 4), dpi=100) -> Figure:
+    """Generate monthly recharge trend chart."""
+    month_keys = _iter_recent_month_keys(months)
+    month_totals = {key: 0.0 for key in month_keys}
+
+    for site in sites:
+        for record in site.get("recharge_records", []):
+            amount = float(record.get("amount", 0) or 0)
+            if amount <= 0:
+                continue
+            record_dt = _parse_datetime(record.get("date", ""))
+            if not record_dt:
+                continue
+            month_key = record_dt.strftime("%Y-%m")
+            if month_key in month_totals:
+                month_totals[month_key] += amount
+
+    values = [month_totals[key] for key in month_keys]
+    labels = [datetime.strptime(key, "%Y-%m").strftime("%y-%m") for key in month_keys]
+
+    if max(values, default=0) <= 0:
+        return _create_placeholder_chart("暂无充值记录", figsize=figsize, dpi=dpi)
+
+    fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
+
+    ax.plot(labels, values, color="#2563eb", linewidth=2.2, marker="o", markersize=5.5)
+    ax.fill_between(labels, values, color="#93c5fd", alpha=0.28)
+
+    peak = max(values)
+    for idx, value in enumerate(values):
+        if value <= 0:
+            continue
+        ax.text(
+            idx,
+            value + peak * 0.03,
+            f"${value:,.0f}",
+            ha="center",
+            va="bottom",
+            color="#1f2937",
+            fontproperties=FONT_SMALL,
+        )
+
+    ax.set_title("充值趋势（近12个月）", fontproperties=FONT_TITLE, color="#0f172a", pad=10)
+    ax.set_xlabel("Month", fontproperties=FONT_DEFAULT, color="#334155")
+    ax.set_ylabel("Amount (USD)", fontproperties=FONT_DEFAULT, color="#334155")
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"${y:,.0f}"))
+    ax.set_ylim(0, peak * 1.25)
+
+    _set_axis_style(ax, grid_axis="y")
+    _apply_tick_font(ax)
+
+    step = max(1, len(labels) // 6)
+    for idx, label in enumerate(ax.get_xticklabels()):
+        label.set_visible(idx % step == 0 or idx == len(labels) - 1)
+
+    fig.tight_layout()
+    return fig
+
+
+
+def create_checkin_activity_chart(logs=None, days: int = 30, figsize=(6, 4), dpi=100) -> Figure:
+    """Generate recent check-in activity chart (success/failure + quota trend)."""
+    if logs is None:
+        logs = load_checkin_log()
+
+    today = datetime.now().date()
+    date_list = [today - timedelta(days=offset) for offset in range(max(days, 1) - 1, -1, -1)]
+    date_keys = [d.strftime("%Y-%m-%d") for d in date_list]
+
+    success_map = {key: 0 for key in date_keys}
+    fail_map = {key: 0 for key in date_keys}
+    quota_map = {key: 0.0 for key in date_keys}
+
+    for log in logs:
+        log_dt = _parse_datetime(log.get("time", ""))
+        if not log_dt:
+            continue
+        key = log_dt.strftime("%Y-%m-%d")
+        if key not in success_map:
+            continue
+
+        if log.get("success"):
+            success_map[key] += 1
+            quota_map[key] += float(log.get("quota_awarded", 0) or 0)
+        else:
+            fail_map[key] += 1
+
+    success_values = [success_map[key] for key in date_keys]
+    fail_values = [fail_map[key] for key in date_keys]
+    quota_values = [quota_map[key] for key in date_keys]
+
+    if max(success_values + fail_values, default=0) <= 0 and max(quota_values, default=0) <= 0:
+        return _create_placeholder_chart("暂无签到记录", figsize=figsize, dpi=dpi)
+
+    fig, ax1 = plt.subplots(figsize=figsize, dpi=dpi)
+    x_positions = list(range(len(date_keys)))
+
+    ax1.bar(
+        x_positions,
+        success_values,
+        color="#10b981",
+        width=0.72,
+        label="成功",
+        edgecolor="white",
+        linewidth=0.8,
+    )
+    ax1.bar(
+        x_positions,
+        fail_values,
+        bottom=success_values,
+        color="#f97316",
+        width=0.72,
+        label="失败",
+        edgecolor="white",
+        linewidth=0.8,
+    )
+
+    ax2 = ax1.twinx()
+    ax2.plot(
+        x_positions,
+        quota_values,
+        color="#6366f1",
+        marker="o",
+        markersize=3.8,
+        linewidth=2.0,
+        label="额度(USD)",
+    )
+
+    display_labels = [datetime.strptime(key, "%Y-%m-%d").strftime("%m-%d") for key in date_keys]
+    step = max(1, len(display_labels) // 7)
+    tick_pos = [idx for idx in range(len(display_labels)) if (idx % step == 0 or idx == len(display_labels) - 1)]
+    tick_labels = [display_labels[idx] for idx in tick_pos]
+    ax1.set_xticks(tick_pos)
+    ax1.set_xticklabels(tick_labels)
+
+    ax1.set_title("签到活跃度（近30天）", fontproperties=FONT_TITLE, color="#0f172a", pad=10)
+    ax1.set_ylabel("Check-in Count", fontproperties=FONT_DEFAULT, color="#334155")
+    ax2.set_ylabel("Quota (USD)", fontproperties=FONT_DEFAULT, color="#334155")
+
+    _set_axis_style(ax1, grid_axis="y")
+    ax2.spines["top"].set_visible(False)
+    ax2.spines["left"].set_visible(False)
+    ax2.spines["right"].set_color("#cbd5e1")
+    ax2.tick_params(colors="#334155", labelsize=9)
+
+    ax2.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"${y:,.1f}"))
+
+    _apply_tick_font(ax1)
+    _apply_tick_font(ax2)
+
+    handles1, labels1 = ax1.get_legend_handles_labels()
+    handles2, labels2 = ax2.get_legend_handles_labels()
+    legend = ax1.legend(handles1 + handles2, labels1 + labels2, loc="upper left", frameon=False, fontsize=8.8)
+    for text_item in legend.get_texts():
+        text_item.set_fontproperties(FONT_SMALL)
+
+    peak_count = max([s + f for s, f in zip(success_values, fail_values)], default=0)
+    ax1.set_ylim(0, peak_count * 1.28 if peak_count > 0 else 1)
+
+    peak_quota = max(quota_values, default=0)
+    ax2.set_ylim(0, peak_quota * 1.25 if peak_quota > 0 else 1)
+
+    fig.tight_layout()
     return fig
 
 

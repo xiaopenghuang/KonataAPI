@@ -27,6 +27,21 @@ from konata_api.api_presets import (
 from konata_api.utils import resource_path
 
 
+def fit_toplevel(window, preferred_width, preferred_height, min_width=620, min_height=420):
+    """根据屏幕尺寸自适应弹窗大小并居中"""
+    screen_w = window.winfo_screenwidth()
+    screen_h = window.winfo_screenheight()
+
+    width = min(preferred_width, max(screen_w - 60, min_width))
+    height = min(preferred_height, max(screen_h - 120, min_height))
+    width = max(width, min_width)
+    height = max(height, min_height)
+
+    x = max((screen_w - width) // 2, 0)
+    y = max((screen_h - height) // 2, 0)
+    window.geometry(f"{width}x{height}+{x}+{y}")
+
+
 class TestFrame(ttkb.Frame):
     """站点测试面板（嵌入式 Frame）"""
 
@@ -58,9 +73,16 @@ class TestFrame(ttkb.Frame):
         self.selected_preset = tk.StringVar(value="anthropic_relay")
         self.api_config = {}  # 自定义配置
 
+        self._configure_styles()
         self._create_widgets()
         if self.show_site_list:
             self._load_sites()
+
+    def _configure_styles(self):
+        """配置测试模块样式"""
+        style = ttkb.Style()
+        style.configure("Treeview", rowheight=27)
+        style.configure("TLabelframe.Label", font=("Microsoft YaHei UI", 10, "bold"))
 
     def set_current_site(self, site_info: dict):
         """设置当前站点（从外部调用）"""
@@ -71,7 +93,7 @@ class TestFrame(ttkb.Frame):
     def _create_widgets(self):
         """创建界面组件"""
         # 主容器
-        main_frame = ttk.Frame(self, padding=10)
+        main_frame = ttk.Frame(self, padding=12)
         main_frame.pack(fill=BOTH, expand=YES)
 
         if self.show_site_list:
@@ -218,7 +240,7 @@ class TestFrame(ttkb.Frame):
         ).pack(side=LEFT)
 
         # --- 输出区域 ---
-        output_frame = ttk.LabelFrame(right_frame, text="输出", padding=5)
+        output_frame = ttk.LabelFrame(right_frame, text="输出", padding=8)
         output_frame.grid(row=2, column=0, sticky=NSEW, pady=(0, 5))
         output_frame.rowconfigure(0, weight=1)
         output_frame.columnconfigure(0, weight=1)
@@ -227,7 +249,7 @@ class TestFrame(ttkb.Frame):
         self.output_text.grid(row=0, column=0, sticky=NSEW)
 
         # --- 对话区域 ---
-        chat_frame = ttk.LabelFrame(right_frame, text="对话", padding=5)
+        chat_frame = ttk.LabelFrame(right_frame, text="对话", padding=8)
         chat_frame.grid(row=3, column=0, sticky=EW)
         chat_frame.columnconfigure(0, weight=1)
 
@@ -820,8 +842,8 @@ class TestDialog(ttkb.Toplevel):
     def __init__(self, parent, **kwargs):
         super().__init__(parent)
         self.title("站点测试")
-        self.geometry("900x650")
-        self.minsize(800, 550)
+        fit_toplevel(self, preferred_width=980, preferred_height=720, min_width=820, min_height=560)
+        self.minsize(820, 560)
 
         # 设置窗口图标
         try:

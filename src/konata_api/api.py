@@ -49,6 +49,30 @@ def _describe_http_response(status_code: int, text: str, content_type: str = "")
     return "空响应或未知错误"
 
 
+DEFAULT_BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/144.0.0.0 Safari/537.36 Edg/144.0.0.0"
+)
+
+
+def _build_cookie_headers(base_url: str, session_cookie: str, user_id: str = "", include_content_type: bool = False) -> dict:
+    base = base_url.rstrip("/")
+    headers = {
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "User-Agent": DEFAULT_BROWSER_USER_AGENT,
+        "Referer": f"{base}/console",
+        "Origin": base,
+        "Cookie": session_cookie,
+    }
+    if include_content_type:
+        headers["Content-Type"] = "application/json"
+    if user_id:
+        headers["new-api-user"] = user_id
+    return headers
+
+
 def query_balance(
     api_key: str,
     base_url: str = "",
@@ -388,13 +412,7 @@ def do_checkin(
             - checkin_date: 签到日期（成功时）
     """
     base = base_url.rstrip("/")
-    headers = {
-        "Accept": "application/json, text/plain, */*",
-        "Content-Type": "application/json",
-        "Cookie": session_cookie,
-    }
-    if user_id:
-        headers["new-api-user"] = user_id
+    headers = _build_cookie_headers(base, session_cookie, user_id, include_content_type=True)
     if extra_headers:
         headers.update(extra_headers)
 
@@ -426,18 +444,38 @@ def do_checkin(
             _log_debug(f"checkin {base}{path} json_error detail={detail}")
             return {"success": False, "message": f"API 返回非 JSON: {detail}"}
 
+        message = str(data.get("message") or "").strip()
         if data.get("success"):
             return {
                 "success": True,
-                "message": data.get("message", "签到成功"),
+                "message": message or "签到成功",
                 "quota_awarded": data.get("data", {}).get("quota_awarded", 0),
                 "checkin_date": data.get("data", {}).get("checkin_date", ""),
             }
-        else:
+
+        normalized_message = message.lower()
+        already_checked_keywords = (
+            "已签到",
+            "已经签到",
+            "今日已签到",
+            "already checked",
+            "already check",
+            "checked in today",
+            "already signed",
+        )
+        if any((keyword in message) or (keyword in normalized_message) for keyword in already_checked_keywords):
             return {
-                "success": False,
-                "message": data.get("message", "签到失败"),
+                "success": True,
+                "already_checked_in": True,
+                "message": message or "今日已签到",
+                "quota_awarded": 0,
+                "checkin_date": data.get("data", {}).get("checkin_date", ""),
             }
+
+        return {
+            "success": False,
+            "message": message or "签到失败",
+        }
     except requests.exceptions.Timeout:
         _log_debug(f"checkin {base}{path} timeout")
         return {"success": False, "message": "请求超时，请检查网络"}
@@ -467,10 +505,7 @@ def get_checkin_status(base_url: str, session_cookie: str, month: str = None) ->
     if not month:
         month = datetime.now().strftime("%Y-%m")
 
-    headers = {
-        "Accept": "application/json, text/plain, */*",
-        "Cookie": session_cookie,
-    }
+    headers = _build_cookie_headers(base, session_cookie)
 
     try:
         resp = requests.get(f"{base}/api/user/checkin", headers=headers, params={"month": month}, timeout=15)
@@ -510,12 +545,7 @@ def query_balance_by_cookie(base_url: str, session_cookie: str, user_id: str = "
             - raw_data: 原始返回数据
     """
     base = base_url.rstrip("/")
-    headers = {
-        "Accept": "application/json, text/plain, */*",
-        "Cookie": session_cookie,
-    }
-    if user_id:
-        headers["new-api-user"] = user_id
+    headers = _build_cookie_headers(base, session_cookie, user_id)
 
     try:
         resp = requests.get(f"{base}/api/user/self", headers=headers, timeout=15)
