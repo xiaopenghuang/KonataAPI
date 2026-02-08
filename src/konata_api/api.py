@@ -315,7 +315,10 @@ def query_logs(
 
     # 根据认证类型构建请求
     if auth_type == "url_key":
-        headers = {}
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
         # 构建目标 URL (URL 参数认证)
         target_url = f"{base}{api_path}?key={api_key}&p={page}&per_page={page_size}&order={order}"
 
